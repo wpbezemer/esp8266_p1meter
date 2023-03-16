@@ -36,7 +36,7 @@ Finishing off:
 - Configure your wifi and Mqtt settings
 - To check if everything is up and running you can listen to the MQTT topic `hass/status`, on startup a single message is sent.
 
-Debugging:
+Debugging and configuration:
 - Type the IP-Address of your device in the browser. This will open the WiFiTerm page to execute commando's for settings and debugging.
 - There are 3 types of commando's: "set", "set" and "restart server" both needs to be used with comma separated (except "restart server").
   - set commando's:
