@@ -33,8 +33,9 @@ Compiling up using PlatformIO:
 
 Finishing off:
 - You should now see a new wifi network `ESP******` connect to this wifi network, a popup should appear, else manually navigate to `192.168.4.1`
-- Configure your wifi and Mqtt settings
+- Configure your wifi and MQTT settings
 - To check if everything is up and running you can listen to the MQTT topic `hass/status`, on startup a single message is sent.
+- Or open your browser with the IP-Address of your device.
 
 Debugging and configuration:
 - Type the IP-Address of your device in the browser. This will open the WiFiTerm page to execute commando's for settings and debugging.
