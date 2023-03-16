@@ -9,6 +9,10 @@
 #include <ArduinoOTA.h>
 #include <PubSubClient.h>
 
+// * debugging stuff
+#include "WiFiTerm.h"
+ESP8266WebServer server(80);
+
 // * Include settings
 #include "settings.h"
 
@@ -106,7 +110,11 @@ bool mqtt_reconnect()
 
     if (MQTT_RECONNECT_RETRIES >= MQTT_MAX_RECONNECT_TRIES)
     {
-        Serial.printf("*** MQTT connection failed, giving up after %d tries ...\n", MQTT_RECONNECT_RETRIES);
+        if(DEBUGSTATUS == "on"){
+          term.printf("*** MQTT connection failed, giving up after %d tries ...\n", MQTT_RECONNECT_RETRIES);
+        }else{
+          Serial.printf("*** MQTT connection failed, giving up after %d tries ...\n", MQTT_RECONNECT_RETRIES);
+        }
         return false;
     }
 
@@ -115,11 +123,17 @@ bool mqtt_reconnect()
 
 void send_metric(String name, long metric)
 {
-    Serial.print(F("Sending metric to broker: "));
-    Serial.print(name);
-    Serial.print(F("="));
-    Serial.println(metric);
-
+    if(DEBUGSTATUS == "on"){
+      term.print(F("Sending metric to broker: "));
+      term.print(name);
+      term.print(F("="));
+      term.println(metric);
+    }else{
+      Serial.print(F("Sending metric to broker: "));
+      Serial.print(name);
+      Serial.print(F("="));
+      Serial.println(metric);
+    }
     char output[10];
     ltoa(metric, output, sizeof(output));
 
@@ -235,9 +249,18 @@ bool decode_telegram(int len)
     bool validCRCFound = false;
 
     for (int cnt = 0; cnt < len; cnt++) {
-        Serial.print(telegram[cnt]);
+        if(DEBUGSTATUS == "on"){
+          term.print(telegram[cnt]);
+        }else{
+          Serial.print(telegram[cnt]);
+        }
     }
-    Serial.print("\n");
+    
+    if(DEBUGSTATUS == "on"){
+      term.print("\n");
+    }else{
+      Serial.print("\n");
+    }
 
     if (startChar >= 0)
     {
@@ -255,11 +278,19 @@ bool decode_telegram(int len)
         messageCRC[4] = 0;   // * Thanks to HarmOtten (issue 5)
         validCRCFound = (strtol(messageCRC, NULL, 16) == currentCRC);
 
-        if (validCRCFound)
+        if (validCRCFound){
+          if(DEBUGSTATUS == "on"){
+            term.println(F("CRC Valid!"));
+          }else{
             Serial.println(F("CRC Valid!"));
-        else
+          }
+        }else{
+          if(DEBUGSTATUS == "on"){
+            term.println(F("CRC Invalid!"));
+          }else{            
             Serial.println(F("CRC Invalid!"));
-
+          }
+        }
         currentCRC = 0;
     }
     else
@@ -438,6 +469,8 @@ void processLine(int len) {
     if (result) {
         send_data_to_broker();
         LAST_UPDATE_SENT = millis();
+
+        DEBUGCOUNTS++;
     }
 }
 
@@ -550,6 +583,9 @@ void setup_mdns()
     }
 }
 
+// restarting arduino
+void(* resetFunc) (void) = 0;
+
 // **********************************
 // * Setup Main                     *
 // **********************************
@@ -576,7 +612,7 @@ void setup()
     ticker.attach(0.6, tick);
 
     // * Get MQTT Server settings
-    String settings_available = read_eeprom(134, 1);
+    String settings_available = read_eeprom(166, 1);
 
     if (settings_available == "1")
     {
@@ -584,12 +620,14 @@ void setup()
         read_eeprom(64, 6).toCharArray(MQTT_PORT, 6);    // * 64-69
         read_eeprom(70, 32).toCharArray(MQTT_USER, 32);  // * 70-101
         read_eeprom(102, 32).toCharArray(MQTT_PASS, 32); // * 102-133
+        read_eeprom(134, 32).toCharArray(MQTT_ROOT_TOPIC, 32); // * 134-165
     }
 
     WiFiManagerParameter CUSTOM_MQTT_HOST("host", "MQTT hostname", MQTT_HOST, 64);
     WiFiManagerParameter CUSTOM_MQTT_PORT("port", "MQTT port",     MQTT_PORT, 6);
     WiFiManagerParameter CUSTOM_MQTT_USER("user", "MQTT user",     MQTT_USER, 32);
     WiFiManagerParameter CUSTOM_MQTT_PASS("pass", "MQTT pass",     MQTT_PASS, 32);
+    WiFiManagerParameter CUSTOM_MQTT_ROOT_TOPIC("topic", "MQTT root topic",     MQTT_ROOT_TOPIC, 32);
 
     // * WiFiManager local initialization. Once its business is done, there is no need to keep it around
     WiFiManager wifiManager;
@@ -611,6 +649,7 @@ void setup()
     wifiManager.addParameter(&CUSTOM_MQTT_PORT);
     wifiManager.addParameter(&CUSTOM_MQTT_USER);
     wifiManager.addParameter(&CUSTOM_MQTT_PASS);
+    wifiManager.addParameter(&CUSTOM_MQTT_ROOT_TOPIC);
 
     // * Fetches SSID and pass and tries to connect
     // * Reset when no connection after 10 seconds
@@ -628,6 +667,7 @@ void setup()
     strcpy(MQTT_PORT, CUSTOM_MQTT_PORT.getValue());
     strcpy(MQTT_USER, CUSTOM_MQTT_USER.getValue());
     strcpy(MQTT_PASS, CUSTOM_MQTT_PASS.getValue());
+    strcpy(MQTT_ROOT_TOPIC, CUSTOM_MQTT_ROOT_TOPIC.getValue());
 
     // * Save the custom parameters to FS
     if (shouldSaveConfig)
@@ -638,13 +678,14 @@ void setup()
         write_eeprom(64, 6, MQTT_PORT);   // * 64-69
         write_eeprom(70, 32, MQTT_USER);  // * 70-101
         write_eeprom(102, 32, MQTT_PASS); // * 102-133
-        write_eeprom(134, 1, "1");        // * 134 --> always "1"
+        write_eeprom(134, 32, MQTT_ROOT_TOPIC); // * 134-165
+        write_eeprom(166, 1, "1");        // * 166 --> always "1"
         EEPROM.commit();
     }
-
+    
     // * If you get here you have connected to the WiFi
     Serial.println(F("Connected to WIFI..."));
-
+    
     // * Keep LED on
     ticker.detach();
     digitalWrite(LED_BUILTIN, LOW);
@@ -655,11 +696,32 @@ void setup()
     // * Startup MDNS Service
     setup_mdns();
 
+    // * Debugging stuff
+    server.begin();
+    Serial.println("webServer started");
+
+    term.begin(server);
+    //Serial.println("term started");
+    term.link(Serial);
+    term.println("WiFiTerm started");
+    term.println();
+
+    term.setAsDefaultWhenUrlNotFound(); //optional : redirect any unknown url to /term.html
+    term.activateArduinoFavicon(); //optional : send Arduino icon when a browser asks for favicon
+
+    Serial.print("I'm waiting for you at http://");
+    Serial.print(WiFi.localIP());
+    Serial.println("/term.html");
+    Serial.println();
+
+    term.println(F("Connected to WIFI..."));
+
     // * Setup MQTT
-    Serial.printf("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
+    //Serial.printf("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
+    term.printf("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
 
     mqtt_client.setServer(MQTT_HOST, atoi(MQTT_PORT));
-
+    term.println();
 }
 
 // **********************************
@@ -669,8 +731,155 @@ void setup()
 void loop()
 {
     ArduinoOTA.handle();
-    long now = millis();
+    
+    // * Debugging stuff
+    server.handleClient();
+    term.handleClient();
+    unsigned int len = 0;
 
+    if(RESTART_SERVER == 1){
+      delay(2000);
+      resetFunc();
+    }
+
+    if(SETDEBUGOFF == 1){
+      DEBUGSTATUS = "off";
+      term.println("Debug setting is set to: " + DEBUGSTATUS);
+      SETDEBUGOFF = 0;
+      DEBUGCOUNTS = 0;
+    }
+
+    if (term.available())
+    {
+      String teststr = term.readString();
+      String commando[3];
+      len = teststr.length();
+      const char* delimiter = ",";
+      
+      int count = 0;
+      int delimiterIndex = 0;
+      int startSubString = 0;
+      int lastSubString = 0;
+      int countDelimiter = 0;
+
+      for (int i = 0; i < len; i++) {
+        if (teststr.charAt(i) == *delimiter) {
+          countDelimiter++;
+        }
+      }
+
+      while (count <= countDelimiter) { 
+        if (delimiterIndex >= 0) {
+          delimiterIndex = teststr.indexOf(delimiter, startSubString);
+          if(delimiterIndex == -1){
+            delimiterIndex = len;
+          }
+          commando[count] = teststr.substring(startSubString, delimiterIndex);
+          commando[count].trim();
+          startSubString = delimiterIndex + 1;
+        }
+        count++;
+      }
+      
+      if(commando[0] == "set"){
+        // uitleg nodig
+
+        if (commando[1] == "mqtt host"){
+          // change mqtt ip
+          term.println("MQTT Host has been changed to:");
+          
+          strcpy(MQTT_HOST, commando[2].c_str());
+          write_eeprom(0, 64, MQTT_HOST);   // * 0-63
+
+          term.println(MQTT_HOST);
+        }else if(commando[1] == "mqtt port"){
+          // change mqtt port
+          term.println("MQTT Port has been changed to:");
+
+          strcpy(MQTT_PORT, commando[2].c_str());
+          write_eeprom(64, 6, MQTT_PORT);   // * 64-69
+
+          term.println(MQTT_PORT);
+        }else if(commando[1] == "mqtt user"){
+          // change mqtt user
+          term.println("MQTT User has been changed to:");
+
+          strcpy(MQTT_USER, commando[2].c_str());
+          write_eeprom(70, 32, MQTT_USER);  // * 70-101
+
+          term.println(MQTT_USER);
+        }else if(commando[1] == "mqtt pass"){
+          // change mqtt pass
+          term.println("MQTT Password has been changed to:");
+
+          strcpy(MQTT_PASS, commando[2].c_str());
+          write_eeprom(102, 32, MQTT_PASS); // * 102-133
+
+          term.println("********");
+        }else if(commando[1] == "mqtt topic"){
+          // change mqtt topic
+          term.println("MQTT Root topic has been changed to:");
+
+          strcpy(MQTT_ROOT_TOPIC, commando[2].c_str());
+          write_eeprom(134, 32, MQTT_ROOT_TOPIC); // * 134-165        
+          
+          term.println(MQTT_ROOT_TOPIC);
+        }else if(commando[1] == "debug"){
+          // change mqtt topic
+          commando[2].toLowerCase();
+          if(commando[2] == "off" || commando[2] == "on"){
+            DEBUGSTATUS = commando[2];
+            term.println("Set debug is set to: " + DEBUGSTATUS);
+          }else{
+            term.println("Your commando is not recognized.\nPlease check the documentation for all commandos and details.");
+            term.println(commando[0]);
+            term.println(commando[1]);
+            term.println(commando[2]);
+          }
+        }else if(commando[1] == "debug count"){
+          term.println("Set max debug count to: " + commando[2]);
+          MAXDEBUGCOUNTS = commando[2].toInt();
+        }
+      }else if(commando[0] == "get"){
+        // uitleg nodig
+        
+        if(commando[1] == "mqtt host"){
+          // get current mqtt host
+          term.println(MQTT_HOST);
+        }else if(commando[1] == "mqtt port"){
+          // get current mqtt port
+          term.println(MQTT_PORT);
+        }else if(commando[1] == "mqtt user"){
+          // get current mqtt user
+          term.println(MQTT_USER);
+        }else if(commando[1] == "mqtt topic"){
+          // get current mqtt root topic
+          term.println(MQTT_ROOT_TOPIC);
+        }else if(commando[1] == "debug"){
+          // get current debug setting
+          term.println("Debug setting is: " + DEBUGSTATUS);
+        }else if(commando[1] == "debug count"){
+          term.println("Max debug count setting is: " + String(MAXDEBUGCOUNTS));
+        }else{
+          // commando not recognized
+          term.println("Your commando is not recognized.\nPlease check the documentation for all commandos and details.");
+          term.println(commando[0]);
+          term.println(commando[1]);
+        }
+      }else if(commando[0] == "restart server"){
+        // restarting server
+        term.println("restarting server...");
+        term.println();
+        RESTART_SERVER = 1;
+      }else{
+        // commando not recognized
+        term.println("Your commando is not recognized.\nPlease check the documentation for all commandos and details.");
+        term.println(commando[0]);
+        term.println(commando[1]);
+      }
+    }
+
+    long now = millis();
     if (!mqtt_client.connected())
     {
         if (now - LAST_RECONNECT_ATTEMPT > 5000)
@@ -690,5 +899,9 @@ void loop()
     
     if (now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {
         read_p1_hardwareserial();
+        
+        if(DEBUGSTATUS == "on" && DEBUGCOUNTS >= MAXDEBUGCOUNTS ){
+          SETDEBUGOFF = 1;
+        }
     }
 }
