@@ -1,11 +1,11 @@
 # esp8266_p1meter
 
-Software for the ESP2866 that sends P1 smart meter data to an mqtt broker (with OTA firmware updates, WiFi and MQTT configuration through WiFi-Manager, debugging through WiFiTerm)
+Software for the ESP2866 that sends P1 smart meter data to an mqtt broker (with OTA firmware updates, WiFi and MQTT configuration through WiFi-Manager, debugging through WiFiTerm).
 
 ## about this fork
 
 This fork is based on the fork of ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) and tries to add better support of configurations and debuging.
-
+This first version would be accassable without password. Password protection will be implemented with a future version.
 
 
 The fork from ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) (tries) to add support for the `Landys and Gyr E360` smartmeter (DSMR5.0)
@@ -20,8 +20,9 @@ This setup requires:
 - A 4 pin RJ11 or [6 pin RJ12 cable](https://www.tinytronics.nl/shop/nl/kabels/adapters/rj12-naar-6-pins-dupont-jumper-adapter) Both cables work great, but a 6 pin cable can also power the esp8266 on most DSMR5+ meters.
 
 Compiling up using Arduino IDE:
-- Ensure you have selected the right board
+- Ensure you have selected the right board 
 - Using the Tools->Manage Libraries... install `PubSubClient` and `WifiManager`
+- To install WiFiTerm library, you have to download ![WiFiTerm](https://github.com/bricoleau/WiFiTerm) and extract the zip-file to "Arduino\libraries" folder
 - In the file `Settings.h` change `OTA_PASSWORD` to a safe secret value
 - Flash the software
 
@@ -34,6 +35,27 @@ Finishing off:
 - You should now see a new wifi network `ESP******` connect to this wifi network, a popup should appear, else manually navigate to `192.168.4.1`
 - Configure your wifi and Mqtt settings
 - To check if everything is up and running you can listen to the MQTT topic `hass/status`, on startup a single message is sent.
+
+Debugging:
+- Type the IP-Address of your device in the browser. This will open the WiFiTerm page to execute commando's for settings and debugging.
+- There are 3 types of commando's: "set", "set" and "restart server" both needs to be used with comma separated (except "restart server").
+  - set commando's:
+    - "mqtt host" (e.g. "set,mqtt host,192.168.178.11")         --> this is for updating the MQTT Host
+    - "mqtt port" (e.g. "set,mqtt port,1883")                   --> this is for updating the MQTT Port
+    - "mqtt user" (e.g. "set,mqtt user,admin")                  --> this is for updating the MQTT User
+    - "mqtt pass" (e.g. "set,mqtt pass,Awesom#007")             --> this is for updating the MQTT Password
+    - "mqtt topic" (e.g. "set,mqtt topic,test/power/sensors/")  --> this is for updating the MQTT Root Topic
+    - "debug" (e.g. "set,debug,on" or "set,debug,off")          --> this is for enabling or disabled debug of Telegram message.
+    - "debug count" (e.g. "set,debug count,10)                  --> this is for updating how many ValidCrC message needs to be printed with debug on.
+  - get commando's:
+    - "mqtt host" (e.g. "get,mqtt host")                        --> this shows current configured MQTT Host
+    - "mqtt port" (e.g. "get,mqtt port")                        --> this shows current configured MQTT Port
+    - "mqtt user" (e.g. "get,mqtt user")                        --> this shows current configured MQTT User
+    - "mqtt topic" (e.g. "get,mqtt topic")                      --> this shows current configured MQTT Root Topic
+    - "debug" (e.g. "get,debug")                                --> this shows current configured debug setting
+    - "debug count" (e.g. "get,debug count")                    --> this shows current configured debug count number
+  - "retart server"                                             --> this restarts the device
+
 
 ## Connecting to the P1 meter
 Connect the esp8266 to an RJ11 cable/connector following the diagram.
