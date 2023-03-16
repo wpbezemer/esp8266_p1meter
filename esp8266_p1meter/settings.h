@@ -18,7 +18,7 @@
 #define P1_MAXLINELENGTH 1050
 
 // * The hostname of our little creature
-#define HOSTNAME "p1meter"
+#define HOSTNAME "dsmr_reader"
 
 // * The password used for OTA
 #define OTA_PASSWORD "admin"
@@ -29,12 +29,11 @@
 // * MQTT network settings
 #define MQTT_MAX_RECONNECT_TRIES 10
 
-// * MQTT root topic
-#define MQTT_ROOT_TOPIC "sensors/power/p1meter"
+// restart server
+int RESTART_SERVER = 0;
 
 // * MQTT Last reconnection counter
 long LAST_RECONNECT_ATTEMPT = 0;
-
 long LAST_UPDATE_SENT = 0;
 
 // * To be filled with EEPROM data
@@ -42,6 +41,14 @@ char MQTT_HOST[64] = "";
 char MQTT_PORT[6]  = "";
 char MQTT_USER[32] = "";
 char MQTT_PASS[32] = "";
+char MQTT_ROOT_TOPIC[32] = "sensors/power/p1meter";
+
+// * Debugging stuff
+//char DEBUGSTATUS[4] = "off";
+String DEBUGSTATUS = "off";
+int SETDEBUGOFF = 0;
+int DEBUGCOUNTS = 0;
+int MAXDEBUGCOUNTS = 5;
 
 // * Set to store received telegram
 char telegram[P1_MAXLINELENGTH];
