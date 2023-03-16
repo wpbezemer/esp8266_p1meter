@@ -39,7 +39,7 @@ Finishing off:
 
 Debugging and configuration:
 - Type the IP-Address of your device in the browser. This will open the WiFiTerm page to execute commando's for settings and debugging.
-- There are 3 types of commando's: "set", "set" and "restart server" both needs to be used with comma separated (except "restart server").
+- There are 3 types of commando's: "set", "get" and "restart server" both needs to be used with comma separated (except "restart server").
   - set commando's:
     - "mqtt host" (e.g. "set,mqtt host,192.168.178.11")         --> this is for updating the MQTT Host
     - "mqtt port" (e.g. "set,mqtt port,1883")                   --> this is for updating the MQTT Port
