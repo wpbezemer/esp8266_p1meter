@@ -4,8 +4,18 @@ Software for the ESP2866 that sends P1 smart meter data to an mqtt broker (with 
 
 ## about this fork
 
-This fork is based on the fork of ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) and tries to add better support of configurations and debuging.
-This first version would be accassable without password. Password protection will be implemented with a future version.
+This fork is based on the fork of ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) and tries to add better support of configurations and functionalities.
+This first versions of API's would be accassable without password. Password protection will be (maybe) implemented with a future version.
+
+**Extra features:**
+- There are 3 types of API's: "Home assistant auto Discovery", "MQTT Server" and "restart server"
+  - "/retart"                                             --> this restarts the device
+  - "/haon"                                               --> this will enable Home Assistant Auto Discovery
+  - "/haoff"                                              --> this will disable Home Assistant Auto Discovery
+  - "/mqtt?server=192.168.1.19"                           --> this will update the MQTT server and restarts the device
+- WiFi reconnect every 15 mins by configured WiFi unavailability
+- MQTT reconnect once WiFi is reconnected.
+- Home Assistant Auto discovery
 
 
 The fork from ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) (tries) to add support for the `Landys and Gyr E360` smartmeter (DSMR5.0)
@@ -34,16 +44,6 @@ Finishing off:
 - You should now see a new wifi network `ESP******` connect to this wifi network, a popup should appear, else manually navigate to `192.168.4.1`
 - Configure your wifi and MQTT settings
 - To check if everything is up and running you can listen to the MQTT topic `hass/status`, on startup a single message is sent.
-
-**Extra features:**
-- There are 3 types of API's: "Home assistant auto Discovery", "MQTT Server" and "restart server"
-  - "/retart"                                             --> this restarts the device
-  - "/haon"                                               --> this will enable Home Assistant Auto Discovery
-  - "/haoff"                                              --> this will disable Home Assistant Auto Discovery
-  - "/mqtt?server=192.168.1.19"                           --> this will update the MQTT server and restarts the device
-- WiFi reconnect every 15 mins by configured WiFi unavailability
-- MQTT reconnect once WiFi is reconnected.
-- Home Assistant Auto discovery
 
 
 ## Connecting to the P1 meter
