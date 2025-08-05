@@ -35,12 +35,12 @@ Finishing off:
 - Configure your wifi and MQTT settings
 - To check if everything is up and running you can listen to the MQTT topic `hass/status`, on startup a single message is sent.
 
-Extra features:
+**Extra features:**
 - There are 3 types of API's: "Home assistant auto Discovery", "MQTT Server" and "restart server"
   - "/retart"                                             --> this restarts the device
   - "/haon"                                               --> this will enable Home Assistant Auto Discovery
   - "/haoff"                                              --> this will disable Home Assistant Auto Discovery
-  - "/mqtt"                                               --> this restarts the device
+  - "/mqtt?server=192.168.1.19"                           --> this will update the MQTT server and restarts the device
 - WiFi reconnect every 15 mins by configured WiFi unavailability
 - MQTT reconnect once WiFi is reconnected.
 
