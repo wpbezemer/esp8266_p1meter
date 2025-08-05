@@ -43,6 +43,7 @@ Finishing off:
   - "/mqtt?server=192.168.1.19"                           --> this will update the MQTT server and restarts the device
 - WiFi reconnect every 15 mins by configured WiFi unavailability
 - MQTT reconnect once WiFi is reconnected.
+- Home Assistant Auto discovery
 
 
 ## Connecting to the P1 meter
