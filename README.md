@@ -36,10 +36,10 @@ Finishing off:
 - To check if everything is up and running you can listen to the MQTT topic `hass/status`, on startup a single message is sent.
 
 - There are 3 types of API's: "Home assistant auto Discovery", "MQTT Server" and "restart server"
-  - "http://<IP Address>/retart"                                             --> this restarts the device
-  - "http://<IP Address>/haon"                                               --> this will enable Home Assistant Auto Discovery
-  - "http://<IP Address>/haoff"                                              --> this will disable Home Assistant Auto Discovery
-  - "http://<IP Address>/mqtt"                                               --> this restarts the device
+  - "http://<IPAddress>/retart"                                             --> this restarts the device
+  - "http://<IPAddress>/haon"                                               --> this will enable Home Assistant Auto Discovery
+  - "http://<IPAddress>/haoff"                                              --> this will disable Home Assistant Auto Discovery
+  - "http://<IPAddress>/mqtt"                                               --> this restarts the device
 
 
 ## Connecting to the P1 meter
