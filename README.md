@@ -7,6 +7,11 @@ Software for the ESP2866 that sends P1 smart meter data to an mqtt broker (with 
 This fork is based on the fork of ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) and tries to add better support of configurations and functionalities.
 This first versions of API's would be accassable without password. Password protection will be (maybe) implemented with a future version.
 
+The fork from ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) (tries) to add support for the `Landys and Gyr E360` smartmeter (DSMR5.0)
+
+The ![original source](https://github.com/fliphess/esp8266_p1meter) has issues with DSMR5.0 meters who like to send telegrams every 1 second at a high 115200 baud rate. 
+This causes the used SoftwareSerial to struggle to keep up and thus only receives corrupted messages. This fork switches to using the main Hardware serial port (RX) for communication with the meter.
+
 **Extra features:**
 - There are 3 types of API's: "Home assistant auto Discovery", "MQTT Server" and "restart server"
   - "/retart"                                             --> this restarts the device
@@ -16,12 +21,6 @@ This first versions of API's would be accassable without password. Password prot
 - WiFi reconnect every 15 mins by configured WiFi unavailability
 - MQTT reconnect once WiFi is reconnected.
 - Home Assistant Auto discovery
-
-
-The fork from ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) (tries) to add support for the `Landys and Gyr E360` smartmeter (DSMR5.0)
-
-The ![original source](https://github.com/fliphess/esp8266_p1meter) has issues with DSMR5.0 meters who like to send telegrams every 1 second at a high 115200 baud rate. 
-This causes the used SoftwareSerial to struggle to keep up and thus only receives corrupted messages. This fork switches to using the main Hardware serial port (RX) for communication with the meter.
 
 # Getting started
 This setup requires:
