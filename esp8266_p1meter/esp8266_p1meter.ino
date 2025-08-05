@@ -8,10 +8,12 @@
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <PubSubClient.h>
+#include <ArduinoJson.h>
 
-// * debugging stuff
-#include "WiFiTerm.h"
-ESP8266WebServer server(80);
+//for reboot api
+#define WEBSERVER_H
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 
 // * Include settings
 #include "settings.h"
@@ -25,13 +27,182 @@ WiFiClient espClient;
 // * Initiate MQTT client
 PubSubClient mqtt_client(espClient);
 
+// * Initiate API settings
+AsyncWebServer httpRestServer(HTTP_REST_PORT);
+JsonDocument jsonDoc;
+
+// **********************************
+// * API                           *
+// **********************************
+// Serving Reboot API
+void handleRoot(AsyncWebServerRequest *request) {
+  request->send(200, "text/plain", "Ok - P1Meter");
+}
+void handleRestart(AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Server is restarting in 5 seconds, restarting can take up to 1 minute...");
+    
+    Serial.println("Server is restarting in 5 seconds, restarting can take up to 1 minute...");
+    
+    restartInitiated = millis();
+    setRestart = true;
+}
+// Serving Home Assistant Discovery on
+void handleHaon(AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Ok - HA Discovery is on");
+    setHaDOn = true;
+}
+// Serving Home Assistant Discovery off
+void handleHaoff(AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Ok - HA Discovery is off");
+    setHaDOff = true;
+}
+void handleMQTTSettings(AsyncWebServerRequest *request){
+    if (request->hasParam("server")) {
+      const char* server = request->getParam("server")->value().c_str();
+
+      // Update MQTT server
+      read_eeprom(0, 64).toCharArray(MQTT_HOST, 64);
+      Serial.printf("MQTT Server0: %s\n", MQTT_HOST);
+
+      strcpy(MQTT_HOST, server);
+
+      Serial.printf("MQTT Server1: %s\n", MQTT_HOST);
+
+      write_eeprom(0, 64, MQTT_HOST);
+      EEPROM.commit();
+
+      read_eeprom(0, 64).toCharArray(MQTT_HOST, 64);
+      Serial.printf("MQTT Server2: %s\n", MQTT_HOST);
+
+      //mqttClient.publish(mqtt_topic, mqtt_message); // Publish message
+      request->send(200, "text/plain", "MQTT server updated successfully!");
+      restartInitiated = millis();
+      setRestart = true;
+    } else {
+      request->send(400, "text/plain", "Missing server details");
+    }
+}
+
+void handleHaDiscoveryOn() {
+  HA_DISCOVERY = EEPROM.read(167);
+  if(HA_DISCOVERY == false){
+    write_eeprom(167, 5, "true");
+    EEPROM.commit();
+    HA_DISCOVERY = true;
+  }
+  haDiscovery("on");
+  haDiscoverySetupRun = true;
+
+  Serial.println("Home Assistant discovery is on...");
+}
+void handleHaDiscoveryOff() {
+  HA_DISCOVERY = EEPROM.read(167);
+  if(HA_DISCOVERY == true){
+    write_eeprom(167, 5, "false");
+    EEPROM.commit();
+    HA_DISCOVERY = false;
+  }
+  haDiscovery("off");
+  haDiscoverySetupRun = false;
+
+  Serial.println("Home Assistant discovery is off...");
+}
+
+// Creating the Home Assistant config messages
+void sendHomeAssistantConfig(const char *sensorname, const char *sensorid, const String& deviceclass, const String& setHomeAssistant) {
+    topic = String(MQTT_ROOT_TOPIC) + "/" + String(sensorid) + "/config";
+
+    if (setHomeAssistant == "on") {
+        jsonDoc.clear();
+
+        jsonDoc["platform"] = "mqtt";
+        jsonDoc["unique_id"] = "p1_" + String(sensorid);
+        jsonDoc["name"] = String(sensorname);
+        jsonDoc["state_topic"] = String(MQTT_ROOT_TOPIC) + "/" + String(sensorid) + "/state";
+
+        jsonDoc["device"]["identifiers"][0] = "p1meter1337";
+        jsonDoc["device"]["name"] = "P1 Meter";
+        jsonDoc["device"]["model"] = "P1 Meter with HA and API integration";
+        jsonDoc["device"]["manufacturer"] = "tedzor";
+        jsonDoc["device"]["sw_version"] = "1.4";
+
+        jsonDoc["device_class"] = String(deviceclass);
+
+        if (deviceclass == "power" || deviceclass == "current" || deviceclass == "voltage") {
+            jsonDoc["state_class"] = "measurement";
+            jsonDoc["value_template"] = "{{ value|float / 1000 }}";
+
+            if (deviceclass == "power") {
+                jsonDoc["unit_of_measurement"] = "kW";
+                jsonDoc["icon"] = "mdi:lightning-bolt";
+            } else if (deviceclass == "current") {
+                jsonDoc["unit_of_measurement"] = "A";
+                jsonDoc["icon"] = "mdi:current-ac";
+            } else if (deviceclass == "voltage") {
+                jsonDoc["unit_of_measurement"] = "V";
+                jsonDoc["icon"] = "mdi:sine-wave";
+            }
+        } else if (deviceclass == "energy") {
+            jsonDoc["state_class"] = "total_increasing";
+            jsonDoc["value_template"] = "{{ value|float / 1000 }}";
+            jsonDoc["unit_of_measurement"] = "kWh";
+            jsonDoc["icon"] = "mdi:meter-electric-outline";
+        } else if (deviceclass == "gas") {
+            jsonDoc["state_class"] = "total_increasing";
+            jsonDoc["value_template"] = "{{ value|float / 1000 }}";
+            jsonDoc["unit_of_measurement"] = "m³";
+            jsonDoc["icon"] = "mdi:meter-gas";
+        } else {
+            // fallback of default waarden (optioneel)
+        }
+
+        String jsonString;
+        serializeJson(jsonDoc, jsonString);
+
+        bool result = mqtt_client.publish(topic.c_str(), jsonString.c_str(), true);
+
+        if (!result) {
+            Serial.printf("MQTT publish to topic %s failed\n", topic.c_str());
+        }
+    } else if (setHomeAssistant == "off") {
+        bool result = mqtt_client.publish(topic.c_str(), "", true);
+
+        if (!result) {
+            Serial.printf("MQTT publish to set HA discovery off; topic %s failed\n", topic.c_str());
+        }
+    }
+}
+
+// Initiating the Home Assistant config messages
+void haDiscovery(const String& setHomeAssistant) {
+    sendHomeAssistantConfig("L1 instant power usage", "l1_instant_power_usage", "power", setHomeAssistant);
+    sendHomeAssistantConfig("L1 Instant Power Current", "l1_instant_power_current", "current", setHomeAssistant);
+    sendHomeAssistantConfig("L1 Voltage", "l1_voltage", "voltage", setHomeAssistant);
+    sendHomeAssistantConfig("L2 instant power usage", "l2_instant_power_usage", "power", setHomeAssistant);
+    sendHomeAssistantConfig("L2 Instant Power Current", "l2_instant_power_current", "current", setHomeAssistant);
+    sendHomeAssistantConfig("L2 Voltage", "l2_voltage", "voltage", setHomeAssistant);
+    sendHomeAssistantConfig("L3 instant power usage", "l3_instant_power_usage", "power", setHomeAssistant);
+    sendHomeAssistantConfig("L3 Instant Power Current", "l3_instant_power_current", "current", setHomeAssistant);
+    sendHomeAssistantConfig("L3 Voltage", "l3_voltage", "voltage", setHomeAssistant);
+    sendHomeAssistantConfig("Actual Power Consumption", "actual_consumption", "power", setHomeAssistant);
+    sendHomeAssistantConfig("Actual Return Delivery", "actual_returndelivery", "power", setHomeAssistant);
+    sendHomeAssistantConfig("Gas Usage", "gas_meter_m3", "gas", setHomeAssistant);
+    sendHomeAssistantConfig("Consumption High Tariff", "consumption_high_tarif", "energy", setHomeAssistant);
+    sendHomeAssistantConfig("Consumption Low Tariff", "consumption_low_tarif", "energy", setHomeAssistant);
+    sendHomeAssistantConfig("Return Delivery High Tariff", "returndelivery_high_tarif", "energy", setHomeAssistant);
+    sendHomeAssistantConfig("Return Delivery Low Tariff", "returndelivery_low_tarif", "energy", setHomeAssistant);
+    sendHomeAssistantConfig("Long Power Outages", "long_power_outages", "other", setHomeAssistant);
+    sendHomeAssistantConfig("Short Power Outages", "short_power_outages", "other", setHomeAssistant);
+    sendHomeAssistantConfig("Short Power Drops", "short_power_drops", "other", setHomeAssistant);
+    sendHomeAssistantConfig("Short Power Peaks", "short_power_peaks", "other", setHomeAssistant);
+    sendHomeAssistantConfig("Actual Tariff Group", "actual_tarif_group", "other", setHomeAssistant);
+}
+
 // **********************************
 // * WIFI                           *
 // **********************************
-
 // * Gets called when WiFiManager enters configuration mode
-void configModeCallback(WiFiManager *myWiFiManager)
-{
+void configModeCallback(WiFiManager *myWiFiManager) {
     Serial.println(F("Entered config mode"));
     Serial.println(WiFi.softAPIP());
 
@@ -45,10 +216,8 @@ void configModeCallback(WiFiManager *myWiFiManager)
 // **********************************
 // * Ticker (System LED Blinker)    *
 // **********************************
-
 // * Blink on-board Led
-void tick()
-{
+void tick() {
     // * Toggle state
     int state = digitalRead(LED_BUILTIN);    // * Get the current state of GPIO1 pin
     digitalWrite(LED_BUILTIN, !state);       // * Set pin to the opposite state
@@ -57,47 +226,32 @@ void tick()
 // **********************************
 // * MQTT                           *
 // **********************************
-
 // * Send a message to a broker topic
-void send_mqtt_message(const char *topic, char *payload)
-{
+void send_mqtt_message(const char *topic, char *payload) {
     Serial.printf("MQTT Outgoing on %s: ", topic);
     Serial.println(payload);
 
     bool result = mqtt_client.publish(topic, payload, false);
 
-    if (!result)
-    {
+    if (!result) {
         Serial.printf("MQTT publish to topic %s failed\n", topic);
     }
 }
 
 // * Reconnect to MQTT server and subscribe to in and out topics
-bool mqtt_reconnect()
-{
+bool mqtt_reconnect() {
     // * Loop until we're reconnected
     int MQTT_RECONNECT_RETRIES = 0;
 
-    while (!mqtt_client.connected() && MQTT_RECONNECT_RETRIES < MQTT_MAX_RECONNECT_TRIES)
-    {
+    while (!mqtt_client.connected() && MQTT_RECONNECT_RETRIES < MQTT_MAX_RECONNECT_TRIES) {
         MQTT_RECONNECT_RETRIES++;
         Serial.printf("MQTT connection attempt %d / %d ...\n", MQTT_RECONNECT_RETRIES, MQTT_MAX_RECONNECT_TRIES);
 
         // * Attempt to connect
-        if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS))
-        {
+        //if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS)) {
+        if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS)) {
             Serial.println(F("MQTT connected!"));
-
-            // * Once connected, publish an announcement...
-            char *message = new char[16 + strlen(HOSTNAME) + 1];
-            strcpy(message, "p1 meter alive: ");
-            strcat(message, HOSTNAME);
-            mqtt_client.publish("hass/status", message);
-
-            Serial.printf("MQTT root topic: %s\n", MQTT_ROOT_TOPIC);
-        }
-        else
-        {
+        } else {
             Serial.print(F("MQTT Connection failed: rc="));
             Serial.println(mqtt_client.state());
             Serial.println(F(" Retrying in 5 seconds"));
@@ -108,41 +262,28 @@ bool mqtt_reconnect()
         }
     }
 
-    if (MQTT_RECONNECT_RETRIES >= MQTT_MAX_RECONNECT_TRIES)
-    {
-        if(DEBUGSTATUS == "on"){
-          term.printf("*** MQTT connection failed, giving up after %d tries ...\n", MQTT_RECONNECT_RETRIES);
-        }else{
-          Serial.printf("*** MQTT connection failed, giving up after %d tries ...\n", MQTT_RECONNECT_RETRIES);
-        }
+    if (MQTT_RECONNECT_RETRIES >= MQTT_MAX_RECONNECT_TRIES) {
+        Serial.printf("*** MQTT connection failed, giving up after %d tries ...\n", MQTT_RECONNECT_RETRIES);
         return false;
     }
 
     return true;
 }
 
-void send_metric(String name, long metric)
-{
-    if(DEBUGSTATUS == "on"){
-      term.print(F("Sending metric to broker: "));
-      term.print(name);
-      term.print(F("="));
-      term.println(metric);
-    }else{
-      Serial.print(F("Sending metric to broker: "));
-      Serial.print(name);
-      Serial.print(F("="));
-      Serial.println(metric);
-    }
-    char output[10];
-    ltoa(metric, output, sizeof(output));
+void send_metric(const String& name, long metric) {
+    Serial.print(F("Sending metric to broker: "));
+    Serial.print(name);
+    Serial.print(F("="));
+    Serial.println(metric);
 
-    String topic = String(MQTT_ROOT_TOPIC) + "/" + name;
+    char output[12]; // genoeg voor long met sign + null
+    ltoa(metric, output, 10);  // correct basis 10
+
+    topic = String(MQTT_ROOT_TOPIC) + "/" + name + "/state";
     send_mqtt_message(topic.c_str(), output);
 }
 
-void send_data_to_broker()
-{
+void send_data_to_broker() {
     send_metric("consumption_low_tarif", CONSUMPTION_LOW_TARIF);
     send_metric("consumption_high_tarif", CONSUMPTION_HIGH_TARIF);
     send_metric("returndelivery_low_tarif", RETURNDELIVERY_LOW_TARIF);
@@ -172,285 +313,156 @@ void send_data_to_broker()
 // **********************************
 // * P1                             *
 // **********************************
-
-unsigned int CRC16(unsigned int crc, unsigned char *buf, int len)
-{
-	for (int pos = 0; pos < len; pos++)
-    {
+unsigned int CRC16(unsigned int crc, unsigned char *buf, int len) {
+	for (int pos = 0; pos < len; pos++) {
 		crc ^= (unsigned int)buf[pos];    // * XOR byte into least sig. byte of crc
                                           // * Loop over each bit
-        for (int i = 8; i != 0; i--)
-        {
+        for (int i = 8; i != 0; i--) {
             // * If the LSB is set
-            if ((crc & 0x0001) != 0)
-            {
+            if ((crc & 0x0001) != 0) {
                 // * Shift right and XOR 0xA001
                 crc >>= 1;
-				crc ^= 0xA001;
-			}
+				        crc ^= 0xA001;
+			      }
             // * Else LSB is not set
-            else
+            else {
                 // * Just shift right
                 crc >>= 1;
-		}
+            }
+        }
 	}
 	return crc;
 }
 
-bool isNumber(char *res, int len)
-{
-    for (int i = 0; i < len; i++)
-    {
-        if (((res[i] < '0') || (res[i] > '9')) && (res[i] != '.' && res[i] != 0))
+bool isNumber(const char *res, int len) {
+    bool decimalPointFound = false;
+
+    for (int i = 0; i < len && res[i] != '\0'; i++) {
+        if (res[i] == '.') {
+            if (decimalPointFound) return false; // meer dan één punt → ongeldig
+            decimalPointFound = true;
+        } else if (res[i] < '0' || res[i] > '9') {
             return false;
+        }
     }
-    return true;
+
+    return len > 0;
 }
 
-int FindCharInArrayRev(char array[], char c, int len)
-{
-    for (int i = len - 1; i >= 0; i--)
-    {
+int FindCharInArrayRev(char array[], char c, int len) {
+    for (int i = len - 1; i >= 0; i--) {
         if (array[i] == c)
             return i;
     }
     return -1;
 }
 
-long getValue(char *buffer, int maxlen, char startchar, char endchar)
-{
+long getValue(char *buffer, int maxlen, char startchar, char endchar) {
     int s = FindCharInArrayRev(buffer, startchar, maxlen - 2);
-    int l = FindCharInArrayRev(buffer, endchar, maxlen - 2) - s - 1;
+    int e = FindCharInArrayRev(buffer, endchar, maxlen - 2);
+
+    if (s < 0 || e < 0 || e <= s) {
+        return 0;
+    }
+
+    int l = e - s - 1;
+    if (l <= 0 || l >= 16) {
+        return 0;
+    }
 
     char res[16];
-    memset(res, 0, sizeof(res));
+    strncpy(res, buffer + s + 1, l);
+    res[l] = '\0';  // altijd null-termineren!
 
-    if (strncpy(res, buffer + s + 1, l))
-    {
-        if (endchar == '*')
-        {
-            if (isNumber(res, l))
-                // * Lazy convert float to long
-                return (1000 * atof(res));
-        }
-        else if (endchar == ')')
-        {
-            if (isNumber(res, l))
-                return atof(res);
-        }
+    if (!isNumber(res, l)) {
+        return 0;
     }
+
+    double value = atof(res);
+
+    if (endchar == '*') {
+        // lazy convert float to long (x1000)
+        return (long)(value * 1000);
+    } else if (endchar == ')') {
+        return (long)value;
+    }
+
     return 0;
 }
 
-bool decode_telegram(int len)
-{
+bool decode_telegram(int len) {
     int startChar = FindCharInArrayRev(telegram, '/', len);
     int endChar = FindCharInArrayRev(telegram, '!', len);
     bool validCRCFound = false;
 
     for (int cnt = 0; cnt < len; cnt++) {
-        if(DEBUGSTATUS == "on"){
-          term.print(telegram[cnt]);
-        }else{
-          Serial.print(telegram[cnt]);
+        Serial.print(telegram[cnt]);
+    }
+    Serial.print("\n");
+
+    if (startChar >= 0) {
+        currentCRC = CRC16(0x0000, (unsigned char*)telegram + startChar, len - startChar);
+    } else if (endChar >= 0) {
+        currentCRC = CRC16(currentCRC, (unsigned char*)telegram + endChar, 1);
+
+        char messageCRC[5] = {0};
+
+        if (endChar + 5 <= len) {
+            strncpy(messageCRC, telegram + endChar + 1, 4);
+            messageCRC[4] = 0;
+            validCRCFound = (strtol(messageCRC, NULL, 16) == currentCRC);
         }
-    }
-    
-    if(DEBUGSTATUS == "on"){
-      term.print("\n");
-    }else{
-      Serial.print("\n");
-    }
 
-    if (startChar >= 0)
-    {
-        // * Start found. Reset CRC calculation
-        currentCRC = CRC16(0x0000,(unsigned char *) telegram+startChar, len-startChar);
-    }
-    else if (endChar >= 0)
-    {
-        // * Add to crc calc
-        currentCRC = CRC16(currentCRC,(unsigned char*)telegram+endChar, 1);
-
-        char messageCRC[5];
-        strncpy(messageCRC, telegram + endChar + 1, 4);
-
-        messageCRC[4] = 0;   // * Thanks to HarmOtten (issue 5)
-        validCRCFound = (strtol(messageCRC, NULL, 16) == currentCRC);
-
-        if (validCRCFound){
-          if(DEBUGSTATUS == "on"){
-            term.println(F("CRC Valid!"));
-          }else{
-            Serial.println(F("CRC Valid!"));
-          }
-        }else{
-          if(DEBUGSTATUS == "on"){
-            term.println(F("CRC Invalid!"));
-          }else{            
-            Serial.println(F("CRC Invalid!"));
-          }
-        }
+        Serial.println(validCRCFound ? F("CRC Valid!") : F("CRC Invalid!"));
         currentCRC = 0;
-    }
-    else
-    {
-        currentCRC = CRC16(currentCRC, (unsigned char*) telegram, len);
+    } else {
+        currentCRC = CRC16(currentCRC, (unsigned char*)telegram, len);
     }
 
-    // 1-0:1.8.1(000992.992*kWh)
-    // 1-0:1.8.1 = Elektra verbruik laag tarief (DSMR v4.0)
-    if (strncmp(telegram, "1-0:1.8.1", strlen("1-0:1.8.1")) == 0)
-    {
-        CONSUMPTION_LOW_TARIF = getValue(telegram, len, '(', '*');
-    }
+    struct TelegramField {
+        const char* key;
+        long* target;
+        char stopChar;
+    };
 
-    // 1-0:1.8.2(000560.157*kWh)
-    // 1-0:1.8.2 = Elektra verbruik hoog tarief (DSMR v4.0)
-    if (strncmp(telegram, "1-0:1.8.2", strlen("1-0:1.8.2")) == 0)
-    {
-        CONSUMPTION_HIGH_TARIF = getValue(telegram, len, '(', '*');
-    }
-	
-    // 1-0:2.8.1(000560.157*kWh)
-    // 1-0:2.8.1 = Elektra teruglevering laag tarief (DSMR v4.0)
-    if (strncmp(telegram, "1-0:2.8.1", strlen("1-0:2.8.1")) == 0)
-    {
-        RETURNDELIVERY_LOW_TARIF = getValue(telegram, len, '(', '*');
-    }
+    const TelegramField fields[] = {
+        {"1-0:1.8.1", &CONSUMPTION_LOW_TARIF, '*'},
+        {"1-0:1.8.2", &CONSUMPTION_HIGH_TARIF, '*'},
+        {"1-0:2.8.1", &RETURNDELIVERY_LOW_TARIF, '*'},
+        {"1-0:2.8.2", &RETURNDELIVERY_HIGH_TARIF, '*'},
+        {"1-0:1.7.0", &ACTUAL_CONSUMPTION, '*'},
+        {"1-0:2.7.0", &ACTUAL_RETURNDELIVERY, '*'},
+        {"1-0:21.7.0", &L1_INSTANT_POWER_USAGE, '*'},
+        {"1-0:41.7.0", &L2_INSTANT_POWER_USAGE, '*'},
+        {"1-0:61.7.0", &L3_INSTANT_POWER_USAGE, '*'},
+        {"1-0:31.7.0", &L1_INSTANT_POWER_CURRENT, '*'},
+        {"1-0:51.7.0", &L2_INSTANT_POWER_CURRENT, '*'},
+        {"1-0:71.7.0", &L3_INSTANT_POWER_CURRENT, '*'},
+        {"1-0:32.7.0", &L1_VOLTAGE, '*'},
+        {"1-0:52.7.0", &L2_VOLTAGE, '*'},
+        {"1-0:72.7.0", &L3_VOLTAGE, '*'},
+        {"0-1:24.2.1", &GAS_METER_M3, '*'},
+        {"0-0:96.14.0", &ACTUAL_TARIF, ')'},
+        {"0-0:96.7.21", &SHORT_POWER_OUTAGES, ')'},
+        {"0-0:96.7.9", &LONG_POWER_OUTAGES, ')'},
+        {"1-0:32.32.0", &SHORT_POWER_DROPS, ')'},
+        {"1-0:32.36.0", &SHORT_POWER_PEAKS, ')'},
+    };
 
-    // 1-0:2.8.2(000560.157*kWh)
-    // 1-0:2.8.2 = Elektra teruglevering hoog tarief (DSMR v4.0)
-    if (strncmp(telegram, "1-0:2.8.2", strlen("1-0:2.8.2")) == 0)
-    {
-        RETURNDELIVERY_HIGH_TARIF = getValue(telegram, len, '(', '*');
-    }
-
-    // 1-0:1.7.0(00.424*kW) Actueel verbruik
-    // 1-0:1.7.x = Electricity consumption actual usage (DSMR v4.0)
-    if (strncmp(telegram, "1-0:1.7.0", strlen("1-0:1.7.0")) == 0)
-    {
-        ACTUAL_CONSUMPTION = getValue(telegram, len, '(', '*');
-    }
-
-    // 1-0:2.7.0(00.000*kW) Actuele teruglevering (-P) in 1 Watt resolution
-    if (strncmp(telegram, "1-0:2.7.0", strlen("1-0:2.7.0")) == 0)
-    {
-        ACTUAL_RETURNDELIVERY = getValue(telegram, len, '(', '*');
-    }
-
-    // 1-0:21.7.0(00.378*kW)
-    // 1-0:21.7.0 = Instantaan vermogen Elektriciteit levering L1
-    if (strncmp(telegram, "1-0:21.7.0", strlen("1-0:21.7.0")) == 0)
-    {
-        L1_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
-    }
-
-    // 1-0:41.7.0(00.378*kW)
-    // 1-0:41.7.0 = Instantaan vermogen Elektriciteit levering L2
-    if (strncmp(telegram, "1-0:41.7.0", strlen("1-0:41.7.0")) == 0)
-    {
-        L2_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
-    }
-
-    // 1-0:61.7.0(00.378*kW)
-    // 1-0:61.7.0 = Instantaan vermogen Elektriciteit levering L3
-    if (strncmp(telegram, "1-0:61.7.0", strlen("1-0:61.7.0")) == 0)
-    {
-        L3_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
-    }
-
-    // 1-0:31.7.0(002*A)
-    // 1-0:31.7.0 = Instantane stroom Elektriciteit L1
-    if (strncmp(telegram, "1-0:31.7.0", strlen("1-0:31.7.0")) == 0)
-    {
-        L1_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
-    }
-    // 1-0:51.7.0(002*A)
-    // 1-0:51.7.0 = Instantane stroom Elektriciteit L2
-    if (strncmp(telegram, "1-0:51.7.0", strlen("1-0:51.7.0")) == 0)
-    {
-        L2_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
-    }
-    // 1-0:71.7.0(002*A)
-    // 1-0:71.7.0 = Instantane stroom Elektriciteit L3
-    if (strncmp(telegram, "1-0:71.7.0", strlen("1-0:71.7.0")) == 0)
-    {
-        L3_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
-    }
-
-    // 1-0:32.7.0(232.0*V)
-    // 1-0:32.7.0 = Voltage L1
-    if (strncmp(telegram, "1-0:32.7.0", strlen("1-0:32.7.0")) == 0)
-    {
-        L1_VOLTAGE = getValue(telegram, len, '(', '*');
-    }
-    // 1-0:52.7.0(232.0*V)
-    // 1-0:52.7.0 = Voltage L2
-    if (strncmp(telegram, "1-0:52.7.0", strlen("1-0:52.7.0")) == 0)
-    {
-        L2_VOLTAGE = getValue(telegram, len, '(', '*');
-    }   
-    // 1-0:72.7.0(232.0*V)
-    // 1-0:72.7.0 = Voltage L3
-    if (strncmp(telegram, "1-0:72.7.0", strlen("1-0:72.7.0")) == 0)
-    {
-        L3_VOLTAGE = getValue(telegram, len, '(', '*');
-    }
-
-    // 0-1:24.2.1(150531200000S)(00811.923*m3)
-    // 0-1:24.2.1 = Gas (DSMR v4.0) on Kaifa MA105 meter
-    if (strncmp(telegram, "0-1:24.2.1", strlen("0-1:24.2.1")) == 0)
-    {
-        GAS_METER_M3 = getValue(telegram, len, '(', '*');
-    }
-
-    // 0-0:96.14.0(0001)
-    // 0-0:96.14.0 = Actual Tarif
-    if (strncmp(telegram, "0-0:96.14.0", strlen("0-0:96.14.0")) == 0)
-    {
-        ACTUAL_TARIF = getValue(telegram, len, '(', ')');
-    }
-
-    // 0-0:96.7.21(00003)
-    // 0-0:96.7.21 = Aantal onderbrekingen Elektriciteit
-    if (strncmp(telegram, "0-0:96.7.21", strlen("0-0:96.7.21")) == 0)
-    {
-        SHORT_POWER_OUTAGES = getValue(telegram, len, '(', ')');
-    }
-
-    // 0-0:96.7.9(00001)
-    // 0-0:96.7.9 = Aantal lange onderbrekingen Elektriciteit
-    if (strncmp(telegram, "0-0:96.7.9", strlen("0-0:96.7.9")) == 0)
-    {
-        LONG_POWER_OUTAGES = getValue(telegram, len, '(', ')');
-    }
-
-    // 1-0:32.32.0(00000)
-    // 1-0:32.32.0 = Aantal korte spanningsdalingen Elektriciteit in fase 1
-    if (strncmp(telegram, "1-0:32.32.0", strlen("1-0:32.32.0")) == 0)
-    {
-        SHORT_POWER_DROPS = getValue(telegram, len, '(', ')');
-    }
-
-    // 1-0:32.36.0(00000)
-    // 1-0:32.36.0 = Aantal korte spanningsstijgingen Elektriciteit in fase 1
-    if (strncmp(telegram, "1-0:32.36.0", strlen("1-0:32.36.0")) == 0)
-    {
-        SHORT_POWER_PEAKS = getValue(telegram, len, '(', ')');
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+        if (strncmp(telegram, fields[i].key, strlen(fields[i].key)) == 0) {
+            *fields[i].target = getValue(telegram, len, '(', fields[i].stopChar);
+        }
     }
 
     return validCRCFound;
 }
 
-void read_p1_hardwareserial()
-{
-    if (Serial.available())
-    {
+void read_p1_hardwareserial() {
+    if (Serial.available()) {
         memset(telegram, 0, sizeof(telegram));
 
-        while (Serial.available())
-        {
+        while (Serial.available()) {
             ESP.wdtDisable();
             int len = Serial.readBytesUntil('\n', telegram, P1_MAXLINELENGTH);
             ESP.wdtEnable(1);
@@ -469,38 +481,28 @@ void processLine(int len) {
     if (result) {
         send_data_to_broker();
         LAST_UPDATE_SENT = millis();
-
-        DEBUGCOUNTS++;
     }
 }
 
 // **********************************
 // * EEPROM helpers                 *
 // **********************************
-
-String read_eeprom(int offset, int len)
-{
+String read_eeprom(int offset, int len) {
     Serial.print(F("read_eeprom()"));
 
     String res = "";
-    for (int i = 0; i < len; ++i)
-    {
+    for (int i = 0; i < len; ++i) {
         res += char(EEPROM.read(i + offset));
     }
     return res;
 }
 
-void write_eeprom(int offset, int len, String value)
-{
+void write_eeprom(int offset, int len, String value) {
     Serial.println(F("write_eeprom()"));
-    for (int i = 0; i < len; ++i)
-    {
-        if ((unsigned)i < value.length())
-        {
+    for (int i = 0; i < len; ++i) {
+        if ((unsigned)i < value.length()) {
             EEPROM.write(i + offset, value[i]);
-        }
-        else
-        {
+        } else {
             EEPROM.write(i + offset, 0);
         }
     }
@@ -513,8 +515,7 @@ void write_eeprom(int offset, int len, String value)
 bool shouldSaveConfig = false;
 
 // * Callback notifying us of the need to save config
-void save_wifi_config_callback ()
-{
+void save_wifi_config_callback () {
     Serial.println(F("Should save config"));
     shouldSaveConfig = true;
 }
@@ -522,81 +523,62 @@ void save_wifi_config_callback ()
 // **********************************
 // * Setup OTA                      *
 // **********************************
-
-void setup_ota()
-{
-    Serial.println(F("Arduino OTA activated."));
-
-    // * Port defaults to 8266
+void setup_ota() {
+    // Configure OTA settings
     ArduinoOTA.setPort(8266);
-
-    // * Set hostname for OTA
     ArduinoOTA.setHostname(HOSTNAME);
     ArduinoOTA.setPassword(OTA_PASSWORD);
 
-    ArduinoOTA.onStart([]()
-    {
+    // Setup OTA callbacks
+    ArduinoOTA.onStart([]() {
         Serial.println(F("Arduino OTA: Start"));
     });
 
-    ArduinoOTA.onEnd([]()
-    {
+    ArduinoOTA.onEnd([]() {
         Serial.println(F("Arduino OTA: End (Running reboot)"));
     });
 
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-    {
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
         Serial.printf("Arduino OTA Progress: %u%%\r", (progress / (total / 100)));
     });
 
-    ArduinoOTA.onError([](ota_error_t error)
-    {
+    ArduinoOTA.onError([](ota_error_t error) {
         Serial.printf("Arduino OTA Error[%u]: ", error);
-        if (error == OTA_AUTH_ERROR)
-            Serial.println(F("Arduino OTA: Auth Failed"));
-        else if (error == OTA_BEGIN_ERROR)
-            Serial.println(F("Arduino OTA: Begin Failed"));
-        else if (error == OTA_CONNECT_ERROR)
-            Serial.println(F("Arduino OTA: Connect Failed"));
-        else if (error == OTA_RECEIVE_ERROR)
-            Serial.println(F("Arduino OTA: Receive Failed"));
-        else if (error == OTA_END_ERROR)
-            Serial.println(F("Arduino OTA: End Failed"));
+        switch (error) {
+            case OTA_AUTH_ERROR:    Serial.println(F("Auth Failed"));    break;
+            case OTA_BEGIN_ERROR:   Serial.println(F("Begin Failed"));   break;
+            case OTA_CONNECT_ERROR: Serial.println(F("Connect Failed")); break;
+            case OTA_RECEIVE_ERROR: Serial.println(F("Receive Failed")); break;
+            case OTA_END_ERROR:     Serial.println(F("End Failed"));     break;
+        }
     });
 
     ArduinoOTA.begin();
-    Serial.println(F("Arduino OTA finished"));
+    Serial.println(F("Arduino OTA activated."));
 }
 
 // **********************************
 // * Setup MDNS discovery service   *
 // **********************************
-
-void setup_mdns()
-{
+void setup_mdns() {
     Serial.println(F("Starting MDNS responder service"));
 
     bool mdns_result = MDNS.begin(HOSTNAME);
-    if (mdns_result)
-    {
+    if (mdns_result) {
         MDNS.addService("http", "tcp", 80);
     }
 }
 
-// restarting arduino
-void(* resetFunc) (void) = 0;
-
 // **********************************
 // * Setup Main                     *
 // **********************************
-
-void setup()
-{
+void setup() {
     // * Configure EEPROM
     EEPROM.begin(512);
 
     // Setup a hw serial connection for communication with the P1 meter and logging (not using inversion)
     Serial.begin(BAUD_RATE, SERIAL_8N1, SERIAL_FULL);
+    Serial.setRxBufferSize(1024);
     Serial.println("");
     Serial.println("Swapping UART0 RX to inverted");
     Serial.flush();
@@ -614,13 +596,15 @@ void setup()
     // * Get MQTT Server settings
     String settings_available = read_eeprom(166, 1);
 
-    if (settings_available == "1")
-    {
+    if (settings_available == "1") {
         read_eeprom(0, 64).toCharArray(MQTT_HOST, 64);   // * 0-63
         read_eeprom(64, 6).toCharArray(MQTT_PORT, 6);    // * 64-69
         read_eeprom(70, 32).toCharArray(MQTT_USER, 32);  // * 70-101
         read_eeprom(102, 32).toCharArray(MQTT_PASS, 32); // * 102-133
         read_eeprom(134, 32).toCharArray(MQTT_ROOT_TOPIC, 32); // * 134-165
+        //read_eeprom(167, 5).toCharArray(HA_DISCOVERY, 5); // * 167-171
+        HA_DISCOVERY = EEPROM.read(167);
+        
     }
 
     WiFiManagerParameter CUSTOM_MQTT_HOST("host", "MQTT hostname", MQTT_HOST, 64);
@@ -628,12 +612,13 @@ void setup()
     WiFiManagerParameter CUSTOM_MQTT_USER("user", "MQTT user",     MQTT_USER, 32);
     WiFiManagerParameter CUSTOM_MQTT_PASS("pass", "MQTT pass",     MQTT_PASS, 32);
     WiFiManagerParameter CUSTOM_MQTT_ROOT_TOPIC("topic", "MQTT root topic",     MQTT_ROOT_TOPIC, 32);
+    WiFiManagerParameter CUSTOM_HA_DISCOVERY("had", "Home Assistant discovery?", HA_DISCOVERY ? "true" : "false", 5);
 
     // * WiFiManager local initialization. Once its business is done, there is no need to keep it around
     WiFiManager wifiManager;
 
     // * Reset settings - uncomment for testing
-    // wifiManager.resetSettings();
+    //wifiManager.resetSettings();
 
     // * Set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
     wifiManager.setAPCallback(configModeCallback);
@@ -650,17 +635,21 @@ void setup()
     wifiManager.addParameter(&CUSTOM_MQTT_USER);
     wifiManager.addParameter(&CUSTOM_MQTT_PASS);
     wifiManager.addParameter(&CUSTOM_MQTT_ROOT_TOPIC);
+    wifiManager.addParameter(&CUSTOM_HA_DISCOVERY);
 
     // * Fetches SSID and pass and tries to connect
     // * Reset when no connection after 10 seconds
-    if (!wifiManager.autoConnect())
-    {
+    if (!wifiManager.autoConnect()) {
         Serial.println(F("Failed to connect to WIFI and hit timeout"));
 
         // * Reset and try again, or maybe put it to deep sleep
-        ESP.reset();
+        //ESP.reset();
+        ESP.restart();
         delay(WIFI_TIMEOUT);
     }
+
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(true);
 
     // * Read updated parameters
     strcpy(MQTT_HOST, CUSTOM_MQTT_HOST.getValue());
@@ -668,10 +657,11 @@ void setup()
     strcpy(MQTT_USER, CUSTOM_MQTT_USER.getValue());
     strcpy(MQTT_PASS, CUSTOM_MQTT_PASS.getValue());
     strcpy(MQTT_ROOT_TOPIC, CUSTOM_MQTT_ROOT_TOPIC.getValue());
+    //strcpy(HA_DISCOVERY, CUSTOM_HA_DISCOVERY.getValue());
+    HA_DISCOVERY = strcmp(CUSTOM_HA_DISCOVERY.getValue(), "true") == 0;
 
     // * Save the custom parameters to FS
-    if (shouldSaveConfig)
-    {
+    if (shouldSaveConfig) {
         Serial.println(F("Saving WiFiManager config"));
 
         write_eeprom(0, 64, MQTT_HOST);   // * 0-63
@@ -680,12 +670,14 @@ void setup()
         write_eeprom(102, 32, MQTT_PASS); // * 102-133
         write_eeprom(134, 32, MQTT_ROOT_TOPIC); // * 134-165
         write_eeprom(166, 1, "1");        // * 166 --> always "1"
+        //write_eeprom(167, 5, HA_DISCOVERY);        // * 167-171
+        EEPROM.write(167, HA_DISCOVERY);
         EEPROM.commit();
     }
-    
+
     // * If you get here you have connected to the WiFi
     Serial.println(F("Connected to WIFI..."));
-    
+
     // * Keep LED on
     ticker.detach();
     digitalWrite(LED_BUILTIN, LOW);
@@ -696,212 +688,93 @@ void setup()
     // * Startup MDNS Service
     setup_mdns();
 
-    // * Debugging stuff
-    server.begin();
-    Serial.println("webServer started");
-
-    term.begin(server);
-    //Serial.println("term started");
-    term.link(Serial);
-    term.println("WiFiTerm started");
-    term.println();
-
-    term.setAsDefaultWhenUrlNotFound(); //optional : redirect any unknown url to /term.html
-    term.activateArduinoFavicon(); //optional : send Arduino icon when a browser asks for favicon
-
-    Serial.print("I'm waiting for you at http://");
-    Serial.print(WiFi.localIP());
-    Serial.println("/term.html");
-    Serial.println();
-
-    term.println(F("Connected to WIFI..."));
-
     // * Setup MQTT
-    //Serial.printf("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
-    term.printf("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
+    Serial.printf("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
+    Serial.printf("The settings are : %d\n", read_eeprom(166, 1));
 
     mqtt_client.setServer(MQTT_HOST, atoi(MQTT_PORT));
-    term.println();
+    mqtt_client.setBufferSize(700);
+	
+    // * Setup API
+    // routing
+    httpRestServer.on("/", HTTP_GET, handleRoot);
+    httpRestServer.on("/restart", HTTP_GET, handleRestart);
+    httpRestServer.on("/haon", HTTP_GET, handleHaon);
+    httpRestServer.on("/haoff", HTTP_GET, handleHaoff);
+    httpRestServer.on("/mqtt", HTTP_GET, handleMQTTSettings);
+    
+    // Startup API
+    httpRestServer.begin();
+    Serial.println("HTTP server started");
+
 }
 
 // **********************************
 // * Loop                           *
 // **********************************
-
-void loop()
-{
+void loop() {
     ArduinoOTA.handle();
     
-    // * Debugging stuff
-    server.handleClient();
-    term.handleClient();
-    unsigned int len = 0;
+    const unsigned long now = millis();
+    static unsigned long lastWifiReconnectAttempt = 0;
+    static constexpr unsigned long WIFI_RECONNECT_INTERVAL = 15UL * 60UL * 1000UL; // 15 minuten
+    static constexpr unsigned long MQTT_RECONNECT_INTERVAL = 5000;
 
-    if(RESTART_SERVER == 1){
-      delay(2000);
-      resetFunc();
+    const bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+
+    // --- WiFi Herverbinden ---
+    if (!wifiConnected) {
+        Serial.println("WiFi not connected.");
+
+        if (now - lastWifiReconnectAttempt > WIFI_RECONNECT_INTERVAL) {
+            Serial.println("Attempting to reconnect to WiFi...");
+            lastWifiReconnectAttempt = now;
+
+            WiFi.disconnect();  // Force clean reconnect
+            WiFi.begin();       // Uses stored credentials
+        }
+
+        return; // Stop verder uitvoeren tot WiFi weer terug is
     }
 
-    if(SETDEBUGOFF == 1){
-      DEBUGSTATUS = "off";
-      term.println("Debug setting is set to: " + DEBUGSTATUS);
-      SETDEBUGOFF = 0;
-      DEBUGCOUNTS = 0;
-    }
+    // Reset WiFi reconnect timer zodra verbinding weer werkt
+    lastWifiReconnectAttempt = now;
 
-    if (term.available())
-    {
-      String teststr = term.readString();
-      String commando[3];
-      len = teststr.length();
-      const char* delimiter = ",";
-      
-      int count = 0;
-      int delimiterIndex = 0;
-      int startSubString = 0;
-      int lastSubString = 0;
-      int countDelimiter = 0;
-
-      for (int i = 0; i < len; i++) {
-        if (teststr.charAt(i) == *delimiter) {
-          countDelimiter++;
-        }
-      }
-
-      while (count <= countDelimiter) { 
-        if (delimiterIndex >= 0) {
-          delimiterIndex = teststr.indexOf(delimiter, startSubString);
-          if(delimiterIndex == -1){
-            delimiterIndex = len;
-          }
-          commando[count] = teststr.substring(startSubString, delimiterIndex);
-          commando[count].trim();
-          startSubString = delimiterIndex + 1;
-        }
-        count++;
-      }
-      
-      if(commando[0] == "set"){
-        // uitleg nodig
-
-        if (commando[1] == "mqtt host"){
-          // change mqtt ip
-          term.println("MQTT Host has been changed to:");
-          
-          strcpy(MQTT_HOST, commando[2].c_str());
-          write_eeprom(0, 64, MQTT_HOST);   // * 0-63
-
-          term.println(MQTT_HOST);
-        }else if(commando[1] == "mqtt port"){
-          // change mqtt port
-          term.println("MQTT Port has been changed to:");
-
-          strcpy(MQTT_PORT, commando[2].c_str());
-          write_eeprom(64, 6, MQTT_PORT);   // * 64-69
-
-          term.println(MQTT_PORT);
-        }else if(commando[1] == "mqtt user"){
-          // change mqtt user
-          term.println("MQTT User has been changed to:");
-
-          strcpy(MQTT_USER, commando[2].c_str());
-          write_eeprom(70, 32, MQTT_USER);  // * 70-101
-
-          term.println(MQTT_USER);
-        }else if(commando[1] == "mqtt pass"){
-          // change mqtt pass
-          term.println("MQTT Password has been changed to:");
-
-          strcpy(MQTT_PASS, commando[2].c_str());
-          write_eeprom(102, 32, MQTT_PASS); // * 102-133
-
-          term.println("********");
-        }else if(commando[1] == "mqtt topic"){
-          // change mqtt topic
-          term.println("MQTT Root topic has been changed to:");
-
-          strcpy(MQTT_ROOT_TOPIC, commando[2].c_str());
-          write_eeprom(134, 32, MQTT_ROOT_TOPIC); // * 134-165        
-          
-          term.println(MQTT_ROOT_TOPIC);
-        }else if(commando[1] == "debug"){
-          // change mqtt topic
-          commando[2].toLowerCase();
-          if(commando[2] == "off" || commando[2] == "on"){
-            DEBUGSTATUS = commando[2];
-            term.println("Set debug is set to: " + DEBUGSTATUS);
-          }else{
-            term.println("Your commando is not recognized.\nPlease check the documentation for all commandos and details.");
-            term.println(commando[0]);
-            term.println(commando[1]);
-            term.println(commando[2]);
-          }
-        }else if(commando[1] == "debug count"){
-          term.println("Set max debug count to: " + commando[2]);
-          MAXDEBUGCOUNTS = commando[2].toInt();
-        }
-      }else if(commando[0] == "get"){
-        // uitleg nodig
-        
-        if(commando[1] == "mqtt host"){
-          // get current mqtt host
-          term.println(MQTT_HOST);
-        }else if(commando[1] == "mqtt port"){
-          // get current mqtt port
-          term.println(MQTT_PORT);
-        }else if(commando[1] == "mqtt user"){
-          // get current mqtt user
-          term.println(MQTT_USER);
-        }else if(commando[1] == "mqtt topic"){
-          // get current mqtt root topic
-          term.println(MQTT_ROOT_TOPIC);
-        }else if(commando[1] == "debug"){
-          // get current debug setting
-          term.println("Debug setting is: " + DEBUGSTATUS);
-        }else if(commando[1] == "debug count"){
-          term.println("Max debug count setting is: " + String(MAXDEBUGCOUNTS));
-        }else{
-          // commando not recognized
-          term.println("Your commando is not recognized.\nPlease check the documentation for all commandos and details.");
-          term.println(commando[0]);
-          term.println(commando[1]);
-        }
-      }else if(commando[0] == "restart server"){
-        // restarting server
-        term.println("restarting server...");
-        term.println();
-        RESTART_SERVER = 1;
-      }else{
-        // commando not recognized
-        term.println("Your commando is not recognized.\nPlease check the documentation for all commandos and details.");
-        term.println(commando[0]);
-        term.println(commando[1]);
-      }
-    }
-
-    long now = millis();
-    if (!mqtt_client.connected())
-    {
-        if (now - LAST_RECONNECT_ATTEMPT > 5000)
-        {
+    // --- MQTT Herverbinden ---
+    if (!mqtt_client.connected()) {
+        if (now - LAST_RECONNECT_ATTEMPT > MQTT_RECONNECT_INTERVAL) {
             LAST_RECONNECT_ATTEMPT = now;
 
-            if (mqtt_reconnect())
-            {
+            Serial.println("Attempting MQTT reconnect...");
+
+            if (mqtt_reconnect()) {
                 LAST_RECONNECT_ATTEMPT = 0;
+
+                if (HA_DISCOVERY && !haDiscoverySetupRun) {
+                    haDiscovery("on");
+                    haDiscoverySetupRun = true;
+                }
             }
         }
+    } else {
+        mqtt_client.loop();  // Houd verbinding actief
     }
-    else
-    {
-        mqtt_client.loop();
-    }
-    
+
     if (now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {
         read_p1_hardwareserial();
-        
-        if(DEBUGSTATUS == "on" && DEBUGCOUNTS >= MAXDEBUGCOUNTS ){
-          SETDEBUGOFF = 1;
-        }
+    }
+
+    if(setRestart && now - restartInitiated >= restartInterval) {
+        ESP.restart();
+    }
+
+    if(setHaDOn) {
+        handleHaDiscoveryOn();
+        setHaDOn = false;
+    }
+
+    if(setHaDOff) {
+        handleHaDiscoveryOff();
+        setHaDOff = false;
     }
 }
