@@ -18,7 +18,7 @@
 #define P1_MAXLINELENGTH 1050
 
 // * The hostname of our little creature
-#define HOSTNAME "dsmr_reader"
+#define HOSTNAME "p1meter1"
 
 // * The password used for OTA
 #define OTA_PASSWORD "admin"
@@ -29,8 +29,11 @@
 // * MQTT network settings
 #define MQTT_MAX_RECONNECT_TRIES 10
 
-// restart server
-int RESTART_SERVER = 0;
+// * API Port
+#define HTTP_REST_PORT 80
+
+// * MQTT root topic
+char MQTT_ROOT_TOPIC[32] = "homeassistant/sensor/p1meter";
 
 // * MQTT Last reconnection counter
 long LAST_RECONNECT_ATTEMPT = 0;
@@ -41,14 +44,7 @@ char MQTT_HOST[64] = "";
 char MQTT_PORT[6]  = "";
 char MQTT_USER[32] = "";
 char MQTT_PASS[32] = "";
-char MQTT_ROOT_TOPIC[32] = "sensors/power/p1meter";
-
-// * Debugging stuff
-//char DEBUGSTATUS[4] = "off";
-String DEBUGSTATUS = "off";
-int SETDEBUGOFF = 0;
-int DEBUGCOUNTS = 0;
-int MAXDEBUGCOUNTS = 5;
+bool HA_DISCOVERY = false;
 
 // * Set to store received telegram
 char telegram[P1_MAXLINELENGTH];
@@ -82,4 +78,17 @@ long SHORT_POWER_DROPS;
 long SHORT_POWER_PEAKS;
 
 // * Set during CRC checking
-unsigned int currentCRC = 0;
+unsigned int currentCRC = 0; // do not change
+
+// * Set to store full mqtt topic
+String topic;
+
+// * Set home assistant discovery for device startup
+bool haDiscoverySetupRun = false; // do not change
+bool setHaDOn = false;
+bool setHaDOff = false;
+
+// * Restart delay Settings 
+const long restartInterval = 5000; // 5 seconds delay before restart
+unsigned long restartInitiated = 0; // do not change
+bool setRestart = false; // do not change
