@@ -1,129 +1,537 @@
 # esp8266_p1meter
 
-Software for the ESP2866 that sends P1 smart meter data to an mqtt broker (with OTA firmware updates, WiFi and MQTT configuration through WiFi-Manager, debugging through WiFiTerm).
+[![Release](https://img.shields.io/badge/release-v2.5-blue)](https://github.com/wpbezemer/esp8266_p1meter/releases/tag/v2.5)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-green)](LICENSE)
+[![Platform: ESP8266](https://img.shields.io/badge/platform-ESP8266-orange)](https://www.espressif.com/)
 
-## about this fork
+Software voor de ESP8266 die DSMR5 P1 slimme meter data uitleest en verstuurt naar een MQTT broker — met OTA firmware updates, WiFi- en MQTT-configuratie via WiFiManager, Home Assistant Auto Discovery, en een volledige REST API.
 
-This fork is based on the fork of ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) and tries to add better support of configurations and functionalities.
-This first versions of API's would be accassable without password. Password protection will be (maybe) implemented with a future version.
+---
 
-The fork from ![Daniel Jong](https://github.com/daniel-jong/esp8266_p1meter) (tries) to add support for the `Landys and Gyr E360` smartmeter (DSMR5.0)
+## Inhoudsopgave
 
-The ![original source](https://github.com/fliphess/esp8266_p1meter) has issues with DSMR5.0 meters who like to send telegrams every 1 second at a high 115200 baud rate. 
-This causes the used SoftwareSerial to struggle to keep up and thus only receives corrupted messages. This fork switches to using the main Hardware serial port (RX) for communication with the meter.
+- [Over dit project](#over-dit-project)
+- [Functies](#functies)
+- [Benodigdheden](#benodigdheden)
+- [Hardware aansluiting](#hardware-aansluiting)
+- [Installatie](#installatie)
+- [Eerste configuratie](#eerste-configuratie)
+- [MQTT topics](#mqtt-topics)
+- [REST API](#rest-api)
+- [Home Assistant Auto Discovery](#home-assistant-auto-discovery)
+- [JSON Telegram endpoint](#json-telegram-endpoint)
+- [OTA updates](#ota-updates)
+- [Instellingen aanpassen](#instellingen-aanpassen)
+- [Release notes](#release-notes)
+- [Credits](#credits)
 
-**Extra features:**
-- There are 3 types of API's: "Home assistant auto Discovery", "MQTT Server" and "restart server"
-  - "/retart"                                             --> this restarts the device
-  - "/haon"                                               --> this will enable Home Assistant Auto Discovery
-  - "/haoff"                                              --> this will disable Home Assistant Auto Discovery
-  - "/mqtt?server=192.168.1.19"                           --> this will update the MQTT server and restarts the device
-- WiFi reconnect every 15 mins by configured WiFi unavailability
-- MQTT reconnect once WiFi is reconnected.
-- Home Assistant Auto discovery
+---
 
-# Getting started
-This setup requires:
-- An esp8266 (nodeMcu and Wemos d1 mini have been tested)
-- A 10k ohm resistor
-- A 4 pin RJ11 or [6 pin RJ12 cable](https://www.tinytronics.nl/shop/nl/kabels/adapters/rj12-naar-6-pins-dupont-jumper-adapter) Both cables work great, but a 6 pin cable can also power the esp8266 on most DSMR5+ meters.
+## Over dit project
 
-Compiling up using Arduino IDE:
-- Ensure you have selected the right board 
-- Using the Tools->Manage Libraries... install `PubSubClient` and `WifiManager`
-- In the file `Settings.h` change `OTA_PASSWORD` to a safe secret value
-- Flash the software
+De originele firmware had moeite met DSMR5.0 meters die elke seconde een telegram sturen op 115200 baud. SoftwareSerial kon dit niet bijhouden en ontving regelmatig corrupte berichten. Deze versie gebruikt de hardware UART (RX) poort, wat stabiel werkt op hoge baudrates.
 
-Compiling up using PlatformIO:
-- Ensure the correct board type is selected in project configuration
-- In the file `Settings.h` change `OTA_PASSWORD` to a safe secret value
-- Upload the software.
+Verder uitgebreid met een volledige REST API, Home Assistant Auto Discovery, delta detection voor efficiënte MQTT updates, en een configureerbaar update interval dat tot 1 seconde kan.
 
-Finishing off:
-- You should now see a new wifi network `ESP******` connect to this wifi network, a popup should appear, else manually navigate to `192.168.4.1`
-- Configure your wifi and MQTT settings
-- To check if everything is up and running you can listen to the MQTT topic `hass/status`, on startup a single message is sent.
+---
 
+## Functies
 
-## Connecting to the P1 meter
-Connect the esp8266 to an RJ11 cable/connector following the diagram.
+| Functie | Details |
+|---------|---------|
+| **DSMR5 uitlezen** | Hardware UART, stabiel op 115200 baud |
+| **MQTT publicatie** | 27 topics, elk afzonderlijk |
+| **Delta detection** | Stuurt alleen gewijzigde waarden — maakt 1 sec interval realistisch |
+| **Configureerbaar interval** | 1–3600 seconden, via API instelbaar zonder herstart, opgeslagen in EEPROM |
+| **HA Auto Discovery** | Alle sensors verschijnen automatisch in Home Assistant |
+| **Per-fase teruglevering** | L1, L2, L3 teruglevering als aparte MQTT topics |
+| **REST API** | 9 endpoints voor beheer, monitoring en configuratie |
+| **JSON telegram endpoint** | Laatste telegram beschikbaar als JSON via HTTP |
+| **OTA updates** | Draadloos firmware updaten via Arduino OTA |
+| **WiFiManager** | WiFi + MQTT configuratie via captive portal — geen hercompilatie nodig |
+| **Stabiele reconnect** | WiFi reconnect elke 15 min, MQTT elke 5 sec, HA discovery herverstuurd na reconnect |
+| **Versienummer** | Zichtbaar via Serial, REST API en Home Assistant device info |
 
-| P1 pin   | ESP8266 Pin |
-| ----     | ---- |
-| 2 - RTS  | 3.3v |
-| 3 - GND  | GND  |
-| 4 -      |      |
-| 5 - RXD (data) | RX (gpio3) |
+---
 
-On most Landys and Gyr models a 10K resistor should be used between the ESP's 3.3v and the p1's DATA (RXD) pin. Many howto's mention RTS requires 5V (VIN) to activate the P1 port, but for me 3V3 suffices.
+## Benodigdheden
 
-![Wiring](https://raw.githubusercontent.com/daniel-jong/esp8266_p1meter/master/assets/esp8266_p1meter_bb.png)
+**Hardware:**
+- ESP8266 (getest: NodeMCU v1/v3, Wemos D1 Mini)
+- 10kΩ weerstand
+- RJ11 (4-pins) of RJ12 (6-pins) kabel — RJ12 kan de ESP ook voeden vanuit de meter
 
-### Optional: Powering the esp8266 using your DSMR5+ meter 
-<details><summary>Expand to see wiring description</summary>
-<p>
-  
-When using a 6 pin cable you can use the power source provided by the meter.
-  
-| P1 pin   | ESP8266 Pin |
-| ----     | ---- |
-| 1 - 5v out | 5v or Vin |
-| 2 - RTS  | 3.3v |
-| 3 - GND  | GND  |
-| 4 -      |      |
-| 5 - RXD (data) | RX (gpio3) |
-| 6 - GND  | GND  |
+**Software / libraries (Arduino IDE):**
 
-![Wiring powered by meter](https://raw.githubusercontent.com/daniel-jong/esp8266_p1meter/master/assets/esp8266_p1meter_bb_PoweredByMeter.png)
+| Library | Installatie |
+|---------|-------------|
+| `PubSubClient` | Arduino Library Manager |
+| `WiFiManager` | Arduino Library Manager |
+| `ArduinoJson` | Arduino Library Manager |
+| `ESPAsyncTCP` | Arduino Library Manager |
+| `ESPAsyncWebServer` | Arduino Library Manager |
+| `ArduinoOTA` | Ingebouwd in ESP8266 core |
+| `LittleFS` | Ingebouwd in ESP8266 core |
 
-</p>
-</details>
+---
 
-## Data Sent
+## Hardware aansluiting
 
-All metrics are send to their own MQTT topic.
-The software sends out to the following MQTT topics:
+### Standaard (via USB voeding)
+
+| P1 poort pin | ESP8266 pin | Omschrijving |
+|-------------|-------------|-------------|
+| 2 - RTS | 3.3V | Request To Send — hoog houden om data te ontvangen |
+| 3 - GND | GND | Ground |
+| 5 - RXD | RX (GPIO3) | Data lijn |
+
+Gebruik een **10kΩ pull-up weerstand** tussen 3.3V en de DATA (RXD) pin van de P1 poort. Zonder deze weerstand is het signaal geïnverteerd en ontvangt de ESP geen data.
+
+### Optioneel: gevoed door de meter (RJ12)
+
+| P1 poort pin | ESP8266 pin | Omschrijving |
+|-------------|-------------|-------------|
+| 1 - 5V out | 5V / VIN | Voeding vanuit de meter |
+| 2 - RTS | 3.3V | Request To Send |
+| 3 - GND | GND | Ground |
+| 5 - RXD | RX (GPIO3) | Data lijn |
+| 6 - GND | GND | Ground |
+
+> Werkt op de meeste DSMR5+ meters. Op een Landis+Gyr E360 werkt 3.3V op RTS — 5V voeding is niet noodzakelijk.
+
+---
+
+## Installatie
+
+### Arduino IDE
+
+1. Installeer de **ESP8266 board package** via **Tools → Board → Board Manager** — zoek op `esp8266`
+2. Installeer alle benodigde libraries via **Tools → Manage Libraries**
+3. Open `esp8266_p1meter_v2_5.ino`
+4. Pas `OTA_PASSWORD` aan in `variables.h` — gebruik iets unieks, standaard is `admin`
+5. Selecteer het juiste board: **Tools → Board → LOLIN(WEMOS) D1 R2 & mini** (of NodeMCU 1.0)
+6. Selecteer de juiste COM poort
+7. Klik op **Upload**
+
+### PlatformIO
+
+1. Open het project in PlatformIO
+2. Pas `OTA_PASSWORD` aan in `variables.h`
+3. Klik op **Upload**
+
+---
+
+## Eerste configuratie
+
+Na het flashen start de ESP als WiFi Access Point:
+
+1. Zoek op je telefoon of laptop naar het netwerk **`ESP******`** en verbind ermee
+2. Er verschijnt automatisch een configuratiepagina — anders navigeer naar `192.168.4.1`
+3. Vul in:
+   - **WiFi SSID + wachtwoord**
+   - **MQTT hostname** (IP-adres of hostname van je broker, bijv. `192.168.1.10`)
+   - **MQTT port** (standaard `1883`)
+   - **MQTT gebruikersnaam** (leeg laten indien geen authenticatie)
+   - **MQTT wachtwoord** (leeg laten indien geen authenticatie)
+   - **MQTT root topic** (standaard `homeassistant/sensor/p1meter`)
+   - **Home Assistant discovery** (`true` of `false`)
+4. Klik op **Save** — de ESP herstart en verbindt met je netwerk
+
+Het IP-adres is daarna te vinden via je router, de seriële monitor, of het MQTT topic `homeassistant/sensor/p1meter/ip_address/state`.
+
+---
+
+## MQTT topics
+
+Alle waarden worden verstuurd naar hun eigen topic:
 
 ```
-sensors/power/p1meter/consumption_low_tarif 2209397
-sensors/power/p1meter/consumption_high_tarif 1964962
-sensors/power/p1meter/returndelivery_low_tarif 2209397
-sensors/power/p1meter/returndelivery_high_tarif 1964962
-sensors/power/p1meter/actual_consumption 313
-sensors/power/p1meter/actual_returndelivery 0
-sensors/power/p1meter/l1_instant_power_usage 313
-sensors/power/p1meter/l2_instant_power_usage 0
-sensors/power/p1meter/l3_instant_power_usage 0
-sensors/power/p1meter/l1_instant_power_current 1000
-sensors/power/p1meter/l2_instant_power_current 0
-sensors/power/p1meter/l3_instant_power_current 0
-sensors/power/p1meter/l1_voltage 233
-sensors/power/p1meter/l2_voltage 0
-sensors/power/p1meter/l3_voltage 0
-sensors/power/p1meter/gas_meter_m3 968922
-sensors/power/p1meter/actual_tarif_group 2
-sensors/power/p1meter/short_power_outages 3
-sensors/power/p1meter/long_power_outages 1
-sensors/power/p1meter/short_power_drops 0
-sensors/power/p1meter/short_power_peaks 0
+{MQTT_ROOT_TOPIC}/{sensor_id}/state
 ```
 
-## Home Assistant Configuration
+Met de standaard root topic `homeassistant/sensor/p1meter`:
 
-Use this [example](https://raw.githubusercontent.com/daniel-jong/esp8266_p1meter/master/assets/p1_sensors.yaml) for home assistant's `sensor.yaml`
+### Energie
 
-The automatons are yours to create.
-And always remember that sending alerts in case of a power outtage only make sense when you own a UPS battery :)
+| Topic | Omschrijving | Eenheid |
+|-------|-------------|---------|
+| `.../consumption_low_tarif/state` | Verbruik laag tarief | Wh (÷1000 = kWh) |
+| `.../consumption_high_tarif/state` | Verbruik hoog tarief | Wh (÷1000 = kWh) |
+| `.../returndelivery_low_tarif/state` | Teruglevering laag tarief | Wh (÷1000 = kWh) |
+| `.../returndelivery_high_tarif/state` | Teruglevering hoog tarief | Wh (÷1000 = kWh) |
 
-## Thanks to
+### Actueel vermogen
 
-This sketch is mostly copied and pasted from several other projects.
-Standing on the heads of giants, big thanks and great respect to the writers and/or creators of:
+| Topic | Omschrijving | Eenheid |
+|-------|-------------|---------|
+| `.../actual_consumption/state` | Totaal actueel verbruik | W (÷1000 = kW) |
+| `.../actual_returndelivery/state` | Totale actuele teruglevering | W (÷1000 = kW) |
+| `.../l1_instant_power_usage/state` | L1 actueel verbruik | W (÷1000 = kW) |
+| `.../l2_instant_power_usage/state` | L2 actueel verbruik | W (÷1000 = kW) |
+| `.../l3_instant_power_usage/state` | L3 actueel verbruik | W (÷1000 = kW) |
+| `.../l1_instant_power_return/state` | L1 actuele teruglevering | W (÷1000 = kW) |
+| `.../l2_instant_power_return/state` | L2 actuele teruglevering | W (÷1000 = kW) |
+| `.../l3_instant_power_return/state` | L3 actuele teruglevering | W (÷1000 = kW) |
 
-- https://github.com/jantenhove/P1-Meter-ESP8266
-- https://github.com/neographikal/P1-Meter-ESP8266-MQTT
-- http://gejanssen.com/howto/Slimme-meter-uitlezen/
-- https://github.com/rroethof/p1reader/
-- http://romix.macuser.nl/software.html
-- http://blog.regout.info/category/slimmeter/
-- http://domoticx.com/p1-poort-slimme-meter-hardware/
+### Stroom & spanning
+
+| Topic | Omschrijving | Eenheid |
+|-------|-------------|---------|
+| `.../l1_instant_power_current/state` | L1 stroom | mA (÷1000 = A) |
+| `.../l2_instant_power_current/state` | L2 stroom | mA (÷1000 = A) |
+| `.../l3_instant_power_current/state` | L3 stroom | mA (÷1000 = A) |
+| `.../l1_voltage/state` | L1 spanning | mV (÷1000 = V) |
+| `.../l2_voltage/state` | L2 spanning | mV (÷1000 = V) |
+| `.../l3_voltage/state` | L3 spanning | mV (÷1000 = V) |
+
+### Gas
+
+| Topic | Omschrijving | Eenheid |
+|-------|-------------|---------|
+| `.../gas_meter_m3/state` | Gasverbruik | dm³ (÷1000 = m³) |
+| `.../gas_meter_type/state` | Type gasmeter | — |
+| `.../gas_equipment_id/state` | Serienummer gasmeter | — |
+
+### Status & info
+
+| Topic | Omschrijving |
+|-------|-------------|
+| `.../actual_tarif_group/state` | Huidig tarief (1 = laag, 2 = hoog) |
+| `.../short_power_outages/state` | Aantal korte stroomonderbrekingen |
+| `.../long_power_outages/state` | Aantal lange stroomonderbrekingen |
+| `.../short_power_drops/state` | Aantal korte spanningsdalingen |
+| `.../short_power_peaks/state` | Aantal korte spanningspieken |
+| `.../dsrm_version/state` | DSMR versie van de meter |
+| `.../dsrm_datetime/state` | Datum/tijd van het laatste telegram |
+| `.../dsrm_equipment_id/state` | Serienummer elektriciteitsmeter |
+| `.../ip_address/state` | Huidig IP-adres van de ESP |
+
+> Waarden worden als integers verstuurd. Home Assistant past via de `value_template` de deling toe bij sensors met HA Auto Discovery.
+
+---
+
+## REST API
+
+De ESP biedt een HTTP API op poort 80.
+
+**Basis-URL:** `http://{ip-adres}/{endpoint}`
+
+### Overzicht endpoints
+
+| Methode | Endpoint | Omschrijving |
+|---------|----------|-------------|
+| `GET` | `/` | Status + versienummer |
+| `GET` | `/version` | Alleen versienummer |
+| `GET` | `/restart` | Herstart de ESP |
+| `GET` | `/haon` | HA Auto Discovery inschakelen |
+| `GET` | `/haoff` | HA Auto Discovery uitschakelen |
+| `GET` | `/interval` | Huidig update interval opvragen |
+| `GET` | `/interval/set?seconds={n}` | Update interval instellen |
+| `GET` | `/mqtt?server={ip}` | MQTT server bijwerken |
+| `GET` | `/telegram` | Laatste telegram als JSON |
+
+---
+
+### `GET /`
+
+**Response:**
+```
+Ok - P1Meter v2.5
+```
+
+---
+
+### `GET /version`
+
+Handig voor scripts of automatische update checks.
+
+**Response:**
+```
+2.5
+```
+
+---
+
+### `GET /restart`
+
+Herstart de ESP na 5 seconden.
+
+**Response:**
+```
+Server is restarting in 5 seconds, restarting can take up to 1 minute...
+```
+
+```bash
+curl http://192.168.1.x/restart
+```
+
+---
+
+### `GET /haon`
+
+Schakelt Home Assistant Auto Discovery **in**. Stuurt direct de config-berichten naar MQTT. Opgeslagen in EEPROM.
+
+**Response:**
+```
+Ok - HA Discovery is on
+```
+
+```bash
+curl http://192.168.1.x/haon
+```
+
+---
+
+### `GET /haoff`
+
+Schakelt Home Assistant Auto Discovery **uit**. Stuurt lege retained berichten zodat HA de sensors verwijdert. Opgeslagen in EEPROM.
+
+**Response:**
+```
+Ok - HA Discovery is off
+```
+
+```bash
+curl http://192.168.1.x/haoff
+```
+
+---
+
+### `GET /interval`
+
+Geeft het huidige update interval terug.
+
+**Response:**
+```
+Update interval: 5000 ms (5.0 sec)
+```
+
+```bash
+curl http://192.168.1.x/interval
+```
+
+---
+
+### `GET /interval/set?seconds={n}`
+
+Stelt het update interval in. Werkt **direct zonder herstart** en wordt opgeslagen in EEPROM.
+
+**Parameters:**
+
+| Parameter | Verplicht | Waarde |
+|-----------|-----------|--------|
+| `seconds` | Ja | 1 t/m 3600 |
+
+**Response (success):**
+```
+Update interval set to 5 seconds. No restart needed.
+```
+
+**Foutmeldingen:**
+
+| Input | Response |
+|-------|----------|
+| `?seconds=0` | `Invalid value: minimum is 1 second. The P1 meter sends at most 1 telegram per second.` |
+| `?seconds=abc` | `Invalid value: 'abc' is not a number.` |
+| `?seconds=9999` | `Invalid value: maximum is 3600 seconds (1 hour).` |
+
+```bash
+curl "http://192.168.1.x/interval/set?seconds=5"   # 5 seconden
+curl "http://192.168.1.x/interval/set?seconds=1"   # maximale snelheid
+curl "http://192.168.1.x/interval/set?seconds=60"  # standaard
+```
+
+> De instelling blijft actief na een herstart. Na een verse flash geldt de standaard uit `variables.h` (60 seconden).
+
+---
+
+### `GET /mqtt?server={ip}`
+
+Werkt het MQTT server-adres bij, slaat het op in EEPROM en herstart de ESP automatisch.
+
+**Parameters:**
+
+| Parameter | Verplicht | Omschrijving |
+|-----------|-----------|-------------|
+| `server` | Ja | IP-adres of hostname van de MQTT broker |
+
+**Response (success):**
+```
+MQTT server updated successfully!
+```
+
+**Response (fout):**
+```
+Missing server details
+```
+
+```bash
+curl "http://192.168.1.x/mqtt?server=192.168.1.20"
+```
+
+---
+
+### `GET /telegram`
+
+Geeft het meest recent ontvangen en geverifieerde telegram terug als JSON, opgeslagen in LittleFS. Wordt bijgewerkt bij elke succesvolle CRC-check.
+
+**Response (voorbeeld):**
+```json
+{
+  "device": {
+    "ip_address": "192.168.1.50",
+    "dsrm_version": "50",
+    "dsrm_timestamp": "250101120000W",
+    "dsrm_equipment_id": "E0000000000000000"
+  },
+  "readings": {
+    "consumption_low_tarif":  { "value": 1234.567, "unit": "kWh" },
+    "consumption_high_tarif": { "value": 2345.678, "unit": "kWh" },
+    "return_low_tarif":       { "value": 100.000,  "unit": "kWh" },
+    "return_high_tarif":      { "value": 200.000,  "unit": "kWh" }
+  },
+  "actuals": {
+    "actual_consumption": { "value": 1.234, "unit": "kW" },
+    "actual_return":      { "value": 0.000, "unit": "kW" },
+    "tarif": 2
+  },
+  "l1": {
+    "power":        { "value": 0.800, "unit": "kW" },
+    "power_return": { "value": 0.000, "unit": "kW" },
+    "current":      { "value": 3,     "unit": "A"  },
+    "voltage":      { "value": 233,   "unit": "V"  }
+  },
+  "l2": { "...": "..." },
+  "l3": { "...": "..." },
+  "gas": {
+    "gas_delivered":    { "value": 987.654,           "unit": "m3" },
+    "gas_equipment_id": "G0000000000000000",
+    "gas_meter_type":   "003"
+  },
+  "status": {
+    "short_power_outage": 3,
+    "long_power_outage":  1,
+    "short_power_drops":  0,
+    "short_power_peaks":  0
+  },
+  "rawtelegram": [
+    "/XMX5LGBBLA4415650678",
+    "...",
+    "!ABCD"
+  ]
+}
+```
+
+```bash
+curl http://192.168.1.x/telegram
+```
+
+**Gebruik in Home Assistant (RESTful sensor):**
+```yaml
+sensor:
+  - platform: rest
+    name: P1 Telegram
+    resource: http://192.168.1.x/telegram
+    json_attributes:
+      - readings
+      - actuals
+      - l1
+      - l2
+      - l3
+      - gas
+    value_template: "{{ value_json.device.dsrm_timestamp }}"
+```
+
+---
+
+## Home Assistant Auto Discovery
+
+Wanneer HA Discovery ingeschakeld is, publiceert de ESP automatisch MQTT config-berichten zodat alle sensors direct in Home Assistant verschijnen — zonder handmatige YAML configuratie.
+
+**Inschakelen:**
+- Via de configuratiepagina van WiFiManager bij eerste setup
+- Of achteraf via de API: `GET /haon`
+
+**Uitschakelen:**
+- Via de API: `GET /haoff` — stuurt lege retained berichten zodat HA de sensors verwijdert
+
+De sensors verschijnen in Home Assistant onder het device **"P1 Meter"**. Alle sensors zijn aan hetzelfde device gekoppeld.
+
+**Automatisch geconfigureerde sensor-types:**
+
+| Type | HA device_class | HA state_class | Eenheid |
+|------|----------------|----------------|---------|
+| Vermogen | `power` | `measurement` | kW |
+| Stroom | `current` | `measurement` | A |
+| Spanning | `voltage` | `measurement` | V |
+| Energie | `energy` | `total_increasing` | kWh |
+| Gas | `gas` | `total_increasing` | m³ |
+| Tarief, ID's, datum | — | — | — |
+
+---
+
+## OTA updates
+
+Firmware updates kunnen draadloos worden uitgevoerd via Arduino OTA — geen USB kabel nodig.
+
+**Via Arduino IDE:**
+1. Ga naar **Tools → Port**
+2. Onder **Network ports** verschijnt `p1meter at 192.168.x.x`
+3. Selecteer die poort
+4. Upload zoals normaal — de IDE vraagt om het OTA wachtwoord
+
+**Werkt het device niet in de lijst?**
+- Controleer of je PC op hetzelfde netwerk/VLAN zit als de ESP
+- Op Windows kan de firewall mDNS blokkeren — tijdelijk uitschakelen om te testen
+- Als alternatief: selecteer het IP-adres handmatig via **Tools → Port → Enter IP**
+
+**Via command line (`espota.py`):**
+```bash
+python espota.py -i 192.168.1.x -p 8266 -a admin -f esp8266_p1meter_v2_5.ino.bin
+```
+
+**OTA poort:** `8266`  
+**Hostname:** `p1meter` (aanpasbaar via `HOSTNAME` in `variables.h`)  
+**Wachtwoord:** instelbaar via `OTA_PASSWORD` in `variables.h` — standaard `admin`, **verander dit**
+
+---
+
+## Instellingen aanpassen
+
+De meeste instellingen staan in `variables.h` en worden eenmalig bij het flashen ingesteld. Het update interval is daarna ook via de API aan te passen.
+
+| Instelling | Standaard | Omschrijving |
+|-----------|-----------|-------------|
+| `UPDATE_INTERVAL` | `60000` (60 sec) | Standaard interval bij eerste flash — daarna via `/interval/set` |
+| `WIFI_RECONNECT_INTERVAL` | 15 minuten | Wachttijd tussen WiFi reconnect-pogingen |
+| `MQTT_RECONNECT_INTERVAL` | `5000` (5 sec) | Wachttijd tussen MQTT reconnect-pogingen |
+| `HOSTNAME` | `p1meter` | mDNS hostname en OTA naam |
+| `MQTT_ROOT_TOPIC` | `homeassistant/sensor/p1meter` | MQTT root topic |
+| `OTA_PASSWORD` | `admin` | **Verander dit vóór het flashen** |
+
+Instellingen in `settings.h` (buffergroottes, timeouts, versienummer) hoeven normaal niet aangepast te worden.
+
+---
+
+## Release notes
+
+Zie [RELEASE_NOTES.md](RELEASE_NOTES.md) voor een volledig overzicht per versie.
+
+---
+
+## Credits
+
+Dit project is opgebouwd op het werk van velen. Zonder deze forks en bronnen had dit project niet bestaan:
+
+| Project | Auteur | Bijdrage |
+|---------|--------|---------|
+| [esp8266_p1meter](https://github.com/fliphess/esp8266_p1meter) | fliphess | Origineel project — basis P1 uitlezing met SoftwareSerial |
+| [esp8266_p1meter](https://github.com/daniel-jong/esp8266_p1meter) | daniel-jong | DSMR5.0 ondersteuning, overstap naar hardware UART voor stabiele 115200 baud |
+| [esp8266_p1meter](https://github.com/wpbezemer/esp8266_p1meter) | wpbezemer | REST API, HA Auto Discovery, WiFiManager, LittleFS telegram opslag |
+| [P1-Meter-ESP8266](https://github.com/jantenhove/P1-Meter-ESP8266) | jantenhove | Vroege ESP8266 P1 implementatie |
+| [P1-Meter-ESP8266-MQTT](https://github.com/neographikal/P1-Meter-ESP8266-MQTT) | neographikal | MQTT integratie |
+| [Slimme meter uitlezen](http://gejanssen.com/howto/Slimme-meter-uitlezen/) | gejanssen.com | Uitgebreide documentatie over het DSMR P1 protocol |
+
+---
+
+*Licentie: GPL-3.0*
