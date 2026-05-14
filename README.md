@@ -22,6 +22,7 @@ Software voor de ESP8266 die DSMR5 P1 slimme meter data uitleest en verstuurt na
 - [JSON Telegram endpoint](#json-telegram-endpoint)
 - [OTA updates](#ota-updates)
 - [Instellingen aanpassen](#instellingen-aanpassen)
+- [Gerelateerde projecten](#gerelateerde-projecten)
 - [Release notes](#release-notes)
 - [Credits](#credits)
 
@@ -510,6 +511,19 @@ De meeste instellingen staan in `variables.h` en worden eenmalig bij het flashen
 | `OTA_PASSWORD` | `admin` | **Verander dit vóór het flashen** |
 
 Instellingen in `settings.h` (buffergroottes, timeouts, versienummer) hoeven normaal niet aangepast te worden.
+
+---
+
+## Gerelateerde projecten
+
+Zodra de P1 meter data naar Home Assistant stuurt via MQTT, kun je de data direct visualiseren met deze custom Lovelace cards:
+
+| Project | Omschrijving |
+|---------|-------------|
+| [ha-energie-overzicht-card](https://github.com/wpbezemer/ha-energie-overzicht-card) | Totaaloverzicht van gridverbruik, solar productie en teruglevering — met SVG arc gauge, zelfvoorzieningsgraad en bronverdeling |
+| [ha-energie-card-3fase](https://github.com/wpbezemer/ha-energie-card-3fase) | Detail per fase voor 3-fase meters — geanimeerde vermogenspijltjes, stroom, spanning en voortgangsbalk per fase (L1/L2/L3) |
+
+Beide cards ondersteunen HACS-installatie en werken direct met de MQTT topics die deze firmware publiceert.
 
 ---
 
