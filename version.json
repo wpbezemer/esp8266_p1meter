@@ -1,5 +1,5 @@
 {
-  "version": "2.7",
+  "version": "2.7.0",
   "url": "https://github.com/wpbezemer/esp8266_p1meter/releases/latest/download/firmware.bin",
-  "changelog": "https://github.com/wpbezemer/esp8266_p1meter/blob/main/RELEASE_NOTES.md"
+  "changelog": "https://github.com/wpbezemer/esp8266_p1meter/blob/master/RELEASE_NOTES.md"
 }
