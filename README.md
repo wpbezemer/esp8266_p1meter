@@ -1,10 +1,10 @@
 # esp8266_p1meter
 
-[![Release](https://img.shields.io/badge/release-v2.5-blue)](https://github.com/wpbezemer/esp8266_p1meter/releases/tag/v2.5)
+[![Release](https://img.shields.io/badge/release-v2.7.0-blue)](https://github.com/wpbezemer/esp8266_p1meter/releases/tag/v2.7.0)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-green)](LICENSE)
 [![Platform: ESP8266](https://img.shields.io/badge/platform-ESP8266-orange)](https://www.espressif.com/)
 
-Software voor de ESP8266 die DSMR5 P1 slimme meter data uitleest en verstuurt naar een MQTT broker — met OTA firmware updates, WiFi- en MQTT-configuratie via WiFiManager, Home Assistant Auto Discovery, en een volledige REST API.
+Software voor de ESP8266 die DSMR5 P1 slimme meter data uitleest en verstuurt naar een MQTT broker — met OTA firmware updates via web en Arduino, WiFi- en MQTT-configuratie via WiFiManager, Home Assistant Auto Discovery, automatische versiecheck via GitHub, en een volledige REST API.
 
 ---
 
@@ -21,6 +21,8 @@ Software voor de ESP8266 die DSMR5 P1 slimme meter data uitleest en verstuurt na
 - [Home Assistant Auto Discovery](#home-assistant-auto-discovery)
 - [JSON Telegram endpoint](#json-telegram-endpoint)
 - [OTA updates](#ota-updates)
+- [Firmware update via web](#firmware-update-via-web)
+- [Debug modus](#debug-modus)
 - [Instellingen aanpassen](#instellingen-aanpassen)
 - [Gerelateerde projecten](#gerelateerde-projecten)
 - [Release notes](#release-notes)
@@ -32,7 +34,7 @@ Software voor de ESP8266 die DSMR5 P1 slimme meter data uitleest en verstuurt na
 
 De originele firmware had moeite met DSMR5.0 meters die elke seconde een telegram sturen op 115200 baud. SoftwareSerial kon dit niet bijhouden en ontving regelmatig corrupte berichten. Deze versie gebruikt de hardware UART (RX) poort, wat stabiel werkt op hoge baudrates.
 
-Verder uitgebreid met een volledige REST API, Home Assistant Auto Discovery, delta detection voor efficiënte MQTT updates, en een configureerbaar update interval dat tot 1 seconde kan.
+Verder uitgebreid met een volledige REST API, Home Assistant Auto Discovery, delta detection voor efficiënte MQTT updates, een configureerbaar update interval dat tot 1 seconde kan, en een web-gebaseerde OTA updater met automatische versiecheck via GitHub.
 
 ---
 
@@ -41,17 +43,21 @@ Verder uitgebreid met een volledige REST API, Home Assistant Auto Discovery, del
 | Functie | Details |
 |---------|---------|
 | **DSMR5 uitlezen** | Hardware UART, stabiel op 115200 baud |
-| **MQTT publicatie** | 27 topics, elk afzonderlijk |
+| **MQTT publicatie** | 30 topics, elk afzonderlijk |
 | **Delta detection** | Stuurt alleen gewijzigde waarden — maakt 1 sec interval realistisch |
 | **Configureerbaar interval** | 1–3600 seconden, via API instelbaar zonder herstart, opgeslagen in EEPROM |
 | **HA Auto Discovery** | Alle sensors verschijnen automatisch in Home Assistant |
 | **Per-fase teruglevering** | L1, L2, L3 teruglevering als aparte MQTT topics |
-| **REST API** | 9 endpoints voor beheer, monitoring en configuratie |
+| **REST API** | 12 endpoints voor beheer, monitoring en configuratie |
 | **JSON telegram endpoint** | Laatste telegram beschikbaar als JSON via HTTP |
-| **OTA updates** | Draadloos firmware updaten via Arduino OTA |
+| **Web OTA updater** | Firmware updaten via browser — GitHub download of eigen .bin upload |
+| **Automatische versiecheck** | ESP checkt GitHub periodiek op nieuwe versie, publiceert naar MQTT en HA |
+| **Auto-update** | Optioneel automatisch installeren bij nieuwe versie |
+| **Arduino OTA** | Draadloos firmware updaten via Arduino IDE |
 | **WiFiManager** | WiFi + MQTT configuratie via captive portal — geen hercompilatie nodig |
 | **Stabiele reconnect** | WiFi reconnect elke 15 min, MQTT elke 5 sec, HA discovery herverstuurd na reconnect |
-| **Versienummer** | Zichtbaar via Serial, REST API en Home Assistant device info |
+| **Versienummer** | Zichtbaar via Serial, REST API, web updater en Home Assistant device info |
+| **DEBUG flag** | Alle Serial output achter compile-time flag — standaard uit in productie |
 
 ---
 
@@ -71,6 +77,8 @@ Verder uitgebreid met een volledige REST API, Home Assistant Auto Discovery, del
 | `ArduinoJson` | Arduino Library Manager |
 | `ESPAsyncTCP` | Arduino Library Manager |
 | `ESPAsyncWebServer` | Arduino Library Manager |
+| `ESP8266HTTPClient` | Ingebouwd in ESP8266 core |
+| `ESP8266httpUpdate` | Ingebouwd in ESP8266 core |
 | `ArduinoOTA` | Ingebouwd in ESP8266 core |
 | `LittleFS` | Ingebouwd in ESP8266 core |
 
@@ -108,11 +116,12 @@ Gebruik een **10kΩ pull-up weerstand** tussen 3.3V en de DATA (RXD) pin van de 
 
 1. Installeer de **ESP8266 board package** via **Tools → Board → Board Manager** — zoek op `esp8266`
 2. Installeer alle benodigde libraries via **Tools → Manage Libraries**
-3. Open `esp8266_p1meter_v2_5.ino`
+3. Open `esp8266_p1meter_v2_7.ino`
 4. Pas `OTA_PASSWORD` aan in `variables.h` — gebruik iets unieks, standaard is `admin`
-5. Selecteer het juiste board: **Tools → Board → LOLIN(WEMOS) D1 R2 & mini** (of NodeMCU 1.0)
-6. Selecteer de juiste COM poort
-7. Klik op **Upload**
+5. Stel `GITHUB_USER` en `GITHUB_REPO` in `variables.h` in op jouw GitHub repo voor de versiecheck
+6. Selecteer het juiste board: **Tools → Board → LOLIN(WEMOS) D1 R2 & mini** (of NodeMCU 1.0)
+7. Selecteer de juiste COM poort
+8. Klik op **Upload**
 
 ### PlatformIO
 
@@ -206,6 +215,8 @@ Met de standaard root topic `homeassistant/sensor/p1meter`:
 | `.../dsrm_datetime/state` | Datum/tijd van het laatste telegram |
 | `.../dsrm_equipment_id/state` | Serienummer elektriciteitsmeter |
 | `.../ip_address/state` | Huidig IP-adres van de ESP |
+| `.../update_available/state` | `true` als nieuwe firmware beschikbaar is |
+| `.../latest_version/state` | Laatste versie gevonden op GitHub |
 
 > Waarden worden als integers verstuurd. Home Assistant past via de `value_template` de deling toe bij sensors met HA Auto Discovery.
 
@@ -230,6 +241,9 @@ De ESP biedt een HTTP API op poort 80.
 | `GET` | `/interval/set?seconds={n}` | Update interval instellen |
 | `GET` | `/mqtt?server={ip}` | MQTT server bijwerken |
 | `GET` | `/telegram` | Laatste telegram als JSON |
+| `GET` | `/update` | Web firmware updater pagina |
+| `GET` | `/update/check` | Gecachede versiecheck als JSON |
+| `POST` | `/update/upload` | Firmware uploaden als .bin bestand |
 
 ---
 
@@ -237,7 +251,7 @@ De ESP biedt een HTTP API op poort 80.
 
 **Response:**
 ```
-Ok - P1Meter v2.5
+Ok - P1Meter v2.7.0
 ```
 
 ---
@@ -248,7 +262,7 @@ Handig voor scripts of automatische update checks.
 
 **Response:**
 ```
-2.5
+2.7.0
 ```
 
 ---
@@ -361,11 +375,6 @@ Werkt het MQTT server-adres bij, slaat het op in EEPROM en herstart de ESP autom
 MQTT server updated successfully!
 ```
 
-**Response (fout):**
-```
-Missing server details
-```
-
 ```bash
 curl "http://192.168.1.x/mqtt?server=192.168.1.20"
 ```
@@ -405,7 +414,7 @@ Geeft het meest recent ontvangen en geverifieerde telegram terug als JSON, opges
   "l2": { "...": "..." },
   "l3": { "...": "..." },
   "gas": {
-    "gas_delivered":    { "value": 987.654,           "unit": "m3" },
+    "gas_delivered":    { "value": 987.654, "unit": "m3" },
     "gas_equipment_id": "G0000000000000000",
     "gas_meter_type":   "003"
   },
@@ -445,6 +454,27 @@ sensor:
 
 ---
 
+### `GET /update/check`
+
+Geeft de gecachede versiecheck terug als JSON — zonder live GitHub call.
+
+**Response:**
+```json
+{
+  "success": true,
+  "current": "2.7.0",
+  "latest": "2.7.0",
+  "update_available": false,
+  "free_heap": 17984
+}
+```
+
+```bash
+curl http://192.168.1.x/update/check
+```
+
+---
+
 ## Home Assistant Auto Discovery
 
 Wanneer HA Discovery ingeschakeld is, publiceert de ESP automatisch MQTT config-berichten zodat alle sensors direct in Home Assistant verschijnen — zonder handmatige YAML configuratie.
@@ -456,7 +486,7 @@ Wanneer HA Discovery ingeschakeld is, publiceert de ESP automatisch MQTT config-
 **Uitschakelen:**
 - Via de API: `GET /haoff` — stuurt lege retained berichten zodat HA de sensors verwijdert
 
-De sensors verschijnen in Home Assistant onder het device **"P1 Meter"**. Alle sensors zijn aan hetzelfde device gekoppeld.
+De sensors verschijnen in Home Assistant onder het device **"P1 Meter"**. Alle sensors zijn aan hetzelfde device gekoppeld, inclusief de update status sensors.
 
 **Automatisch geconfigureerde sensor-types:**
 
@@ -468,14 +498,21 @@ De sensors verschijnen in Home Assistant onder het device **"P1 Meter"**. Alle s
 | Energie | `energy` | `total_increasing` | kWh |
 | Gas | `gas` | `total_increasing` | m³ |
 | Tarief, ID's, datum | — | — | — |
+| Update beschikbaar | — | — | `true` / `false` |
+| Laatste versie | — | — | versienummer |
+
+---
+
+## JSON Telegram endpoint
+
+Zie `GET /telegram` in de REST API sectie hierboven.
 
 ---
 
 ## OTA updates
 
-Firmware updates kunnen draadloos worden uitgevoerd via Arduino OTA — geen USB kabel nodig.
+### Via Arduino IDE
 
-**Via Arduino IDE:**
 1. Ga naar **Tools → Port**
 2. Onder **Network ports** verschijnt `p1meter at 192.168.x.x`
 3. Selecteer die poort
@@ -483,13 +520,15 @@ Firmware updates kunnen draadloos worden uitgevoerd via Arduino OTA — geen USB
 
 **Werkt het device niet in de lijst?**
 - Controleer of je PC op hetzelfde netwerk/VLAN zit als de ESP
-- Op Windows kan de firewall mDNS blokkeren — tijdelijk uitschakelen om te testen
-- Als alternatief: selecteer het IP-adres handmatig via **Tools → Port → Enter IP**
+- Op Windows kan de firewall mDNS blokkeren — voeg een inbound rule toe voor UDP poort 5353 en 8266
+- Als alternatief: gebruik `espota.py` via de command line
 
 **Via command line (`espota.py`):**
 ```bash
-python espota.py -i 192.168.1.x -p 8266 -a admin -f esp8266_p1meter_v2_5.ino.bin
+python "C:\...\tools\espota.py" -i 192.168.1.x -p 8266 -a admin -f firmware.bin
 ```
+
+`espota.py` is te vinden in `%APPDATA%\Arduino15\packages\esp8266\hardware\esp8266\{versie}\tools\`
 
 **OTA poort:** `8266`  
 **Hostname:** `p1meter` (aanpasbaar via `HOSTNAME` in `variables.h`)  
@@ -497,20 +536,89 @@ python espota.py -i 192.168.1.x -p 8266 -a admin -f esp8266_p1meter_v2_5.ino.bin
 
 ---
 
+## Firmware update via web
+
+Navigeer naar `http://{ip-adres}/update` voor de web updater. Deze pagina biedt:
+
+### Versiecheck
+Bij elke aanroep van de pagina wordt de gecachede versiecheck getoond. De ESP checkt periodiek (elke 6 uur standaard) `version.json` op GitHub en publiceert het resultaat naar MQTT.
+
+### Instellingen
+- **Auto-update** — schakel in om automatisch te updaten zodra een nieuwe versie gevonden wordt. De instelling wordt opgeslagen in EEPROM.
+
+### Update via GitHub
+Downloadt de laatste release direct van GitHub en flasht automatisch. De ESP herstart na het flashen. De pagina toont een voortgangsbalk en redirectt automatisch terug na 25 seconden.
+
+### Update via .bin bestand
+Upload een lokaal gecompileerd `.bin` bestand. Exporteer dit vanuit Arduino IDE via **Sketch → Export Compiled Binary**.
+
+> De versiecheck gebruikt `rawcdn.githack.com` als HTTP proxy voor `raw.githubusercontent.com` — dit vermijdt een HTTPS heap probleem op de ESP8266 (BearSSL vereist ~20KB vrij heap voor SSL, de ESP8266 heeft typisch ~17KB beschikbaar). De firmware download zelf gebruikt wél HTTPS voor integriteit.
+
+### `version.json` instellen voor eigen repo
+
+Zet een `version.json` bestand in de root van je `master` branch:
+
+```json
+{
+  "version": "2.7.0",
+  "url": "https://github.com/{gebruiker}/{repo}/releases/latest/download/firmware.bin",
+  "changelog": "https://github.com/{gebruiker}/{repo}/blob/master/RELEASE_NOTES.md"
+}
+```
+
+Update dit bestand bij elke nieuwe release zodat de versiecheck correct werkt.
+
+---
+
+## Debug modus
+
+Standaard is alle Serial output uitgeschakeld in productie. Schakel in via `variables.h` of bovenaan het `.ino` bestand:
+
+```cpp
+#define DEBUG 1  // 0 = uit (productie), 1 = aan (ontwikkeling)
+```
+
+Met `DEBUG 1` verschijnt in de Serial monitor (115200 baud):
+- Versiecheck resultaat bij opstarten
+- MQTT publish per topic
+- Delta detection — hoeveel topics verstuurd per cyclus
+- WiFi en MQTT reconnect pogingen
+- CRC validatie per telegram
+
+---
+
 ## Instellingen aanpassen
 
-De meeste instellingen staan in `variables.h` en worden eenmalig bij het flashen ingesteld. Het update interval is daarna ook via de API aan te passen.
+De meeste instellingen staan in `variables.h` en worden eenmalig bij het flashen ingesteld. Het update interval en auto-update zijn daarna ook via de web updater of API aan te passen.
 
 | Instelling | Standaard | Omschrijving |
 |-----------|-----------|-------------|
+| `DEBUG` | `0` | Zet op `1` voor Serial output tijdens ontwikkeling |
 | `UPDATE_INTERVAL` | `60000` (60 sec) | Standaard interval bij eerste flash — daarna via `/interval/set` |
 | `WIFI_RECONNECT_INTERVAL` | 15 minuten | Wachttijd tussen WiFi reconnect-pogingen |
 | `MQTT_RECONNECT_INTERVAL` | `5000` (5 sec) | Wachttijd tussen MQTT reconnect-pogingen |
 | `HOSTNAME` | `p1meter` | mDNS hostname en OTA naam |
 | `MQTT_ROOT_TOPIC` | `homeassistant/sensor/p1meter` | MQTT root topic |
 | `OTA_PASSWORD` | `admin` | **Verander dit vóór het flashen** |
+| `GITHUB_USER` | `wpbezemer` | GitHub gebruikersnaam voor versiecheck |
+| `GITHUB_REPO` | `esp8266_p1meter` | GitHub repository naam voor versiecheck |
 
 Instellingen in `settings.h` (buffergroottes, timeouts, versienummer) hoeven normaal niet aangepast te worden.
+
+### EEPROM adresmap
+
+| Adres | Grootte | Inhoud |
+|-------|---------|--------|
+| 0–63 | 64 bytes | MQTT hostname |
+| 64–69 | 6 bytes | MQTT poort |
+| 70–101 | 32 bytes | MQTT gebruikersnaam |
+| 102–133 | 32 bytes | MQTT wachtwoord |
+| 134–165 | 32 bytes | MQTT root topic |
+| 166 | 1 byte | Instellingen beschikbaar vlag |
+| 167 | 1 byte | HA Discovery aan/uit |
+| 168–171 | 4 bytes | Update interval (ms) |
+| 172 | 1 byte | OTA check interval (uren, 0 = uit) |
+| 173 | 1 byte | Auto-update aan/uit |
 
 ---
 
@@ -521,7 +629,7 @@ Zodra de P1 meter data naar Home Assistant stuurt via MQTT, kun je de data direc
 | Project | Omschrijving |
 |---------|-------------|
 | [ha-energie-overzicht-card](https://github.com/wpbezemer/ha-energie-overzicht-card) | Totaaloverzicht van gridverbruik, solar productie en teruglevering — met SVG arc gauge, zelfvoorzieningsgraad en bronverdeling |
-| [ha-energie-card-3fase](https://github.com/wpbezemer/ha-energie-card-3fase) | Detail per fase voor 3-fase meters — geanimeerde vermogenspijltjes, stroom, spanning en voortgangsbalk per fase (L1/L2/L3) |
+| [ha-energie-card-3fase](https://github.com/wpbezemer/ha-energie-card-3fase) | Detail per fase voor 3-fase meters — geanimeerde vermogenspijltjes, stroom, spanning en voortgangsbalk per fase (L1/L2/L3), inclusief historiek grafiek |
 
 Beide cards ondersteunen HACS-installatie en werken direct met de MQTT topics die deze firmware publiceert.
 
@@ -541,7 +649,7 @@ Dit project is opgebouwd op het werk van velen. Zonder deze forks en bronnen had
 |---------|--------|---------|
 | [esp8266_p1meter](https://github.com/fliphess/esp8266_p1meter) | fliphess | Origineel project — basis P1 uitlezing met SoftwareSerial |
 | [esp8266_p1meter](https://github.com/daniel-jong/esp8266_p1meter) | daniel-jong | DSMR5.0 ondersteuning, overstap naar hardware UART voor stabiele 115200 baud |
-| [esp8266_p1meter](https://github.com/wpbezemer/esp8266_p1meter) | wpbezemer | REST API, HA Auto Discovery, WiFiManager, LittleFS telegram opslag |
+| [esp8266_p1meter](https://github.com/wpbezemer/esp8266_p1meter) | wpbezemer | REST API, HA Auto Discovery, WiFiManager, web OTA updater, LittleFS telegram opslag |
 | [P1-Meter-ESP8266](https://github.com/jantenhove/P1-Meter-ESP8266) | jantenhove | Vroege ESP8266 P1 implementatie |
 | [P1-Meter-ESP8266-MQTT](https://github.com/neographikal/P1-Meter-ESP8266-MQTT) | neographikal | MQTT integratie |
 | [Slimme meter uitlezen](http://gejanssen.com/howto/Slimme-meter-uitlezen/) | gejanssen.com | Uitgebreide documentatie over het DSMR P1 protocol |
