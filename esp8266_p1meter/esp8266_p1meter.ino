@@ -79,7 +79,7 @@ unsigned long updateInterval = UPDATE_INTERVAL;
 // * Delta detection — previous values to compare against
 #define METRICS_COUNT (sizeof(metricsFields) / sizeof(metricsFields[0]))
 static long     prevLongValues[METRICS_COUNT];
-static char     prevStringValues[METRICS_COUNT][64];
+static uint32_t prevStringHash[METRICS_COUNT];   // hash i.p.v. kopie: scheelt ~1,9 KB RAM
 static bool     deltaInitialized = false;
 
 // * Forced full update every 5 minutes regardless of delta
@@ -122,7 +122,6 @@ PubSubClient mqtt_client(espClient);
 
 // * Initiate API settings
 AsyncWebServer httpRestServer(HTTP_REST_PORT);
-JsonDocument jsonDoc;
 
 // **********************************
 // * Helpers                        *
@@ -586,27 +585,31 @@ SensorConfig getSensorConfig(const String& deviceclass) {
     return { "unknown", "none", "none", "none", "mdi:help-circle", false };
 }
 
-void sendHomeAssistantConfig(const char *sensorname, const char *sensorid,
-                             const String& deviceclass, const String& setHomeAssistant) {
-    topic = String(MQTT_ROOT_TOPIC) + "/" + String(sensorid) + "/config";
+// Namen/ids staan in flash (F()), niet in RAM
+void sendHomeAssistantConfig(const __FlashStringHelper *sensorname, const __FlashStringHelper *sensorid_f,
+                             const __FlashStringHelper *deviceclass, const String& setHomeAssistant) {
+    const String sensorid(sensorid_f);
+    topic = String(MQTT_ROOT_TOPIC) + "/" + sensorid + F("/config");
     if (setHomeAssistant == "on") {
-        jsonDoc.clear();
-        jsonDoc["platform"]    = "mqtt";
-        jsonDoc["unique_id"]   = "p1_" + String(sensorid);
-        jsonDoc["name"]        = String(sensorname);
-        jsonDoc["state_topic"] = String(MQTT_ROOT_TOPIC) + "/" + String(sensorid) + "/state";
-        jsonDoc["device"]["identifiers"][0]      = "p1meter1337";
-        jsonDoc["device"]["name"]                = "P1 Meter";
-        jsonDoc["device"]["model"]               = "P1 Meter with HA and API integration";
-        jsonDoc["device"]["manufacturer"]        = "tedzor";
-        jsonDoc["device"]["sw_version"]          = APPVERSION;
-        jsonDoc["device"]["configuration_url"]   = String("http://") + IPADDRESS + "/";
-        SensorConfig cfg = getSensorConfig(deviceclass);
-        if (strcmp(cfg.ha_device_class, "none") != 0) jsonDoc["device_class"]       = cfg.ha_device_class;
-        if (strcmp(cfg.state_class,     "none") != 0) jsonDoc["state_class"]         = cfg.state_class;
-        if (strcmp(cfg.unit,            "none") != 0) jsonDoc["unit_of_measurement"] = cfg.unit;
-        jsonDoc["icon"] = cfg.icon;
-        jsonDoc["value_template"] = cfg.divide_by_1000 ? "{{ value|float / 1000 }}" : "{{ value }}";
+        JsonDocument jsonDoc;   // lokaal: geheugen wordt direct weer vrijgegeven
+        jsonDoc[F("platform")]    = F("mqtt");
+        jsonDoc[F("unique_id")]   = String(F("p1_")) + sensorid;
+        jsonDoc[F("name")]        = sensorname;
+        jsonDoc[F("state_topic")] = String(MQTT_ROOT_TOPIC) + "/" + sensorid + F("/state");
+        JsonObject dev = jsonDoc[F("device")].to<JsonObject>();
+        dev[F("identifiers")][0]    = F("p1meter1337");
+        dev[F("name")]              = F("P1 Meter");
+        dev[F("model")]             = F("P1 Meter with HA and API integration");
+        dev[F("manufacturer")]      = F("tedzor");
+        dev[F("sw_version")]        = F(APPVERSION);
+        dev[F("configuration_url")] = String(F("http://")) + IPADDRESS + "/";
+        SensorConfig cfg = getSensorConfig(String(deviceclass));
+        if (strcmp(cfg.ha_device_class, "none") != 0) jsonDoc[F("device_class")]       = cfg.ha_device_class;
+        if (strcmp(cfg.state_class,     "none") != 0) jsonDoc[F("state_class")]         = cfg.state_class;
+        if (strcmp(cfg.unit,            "none") != 0) jsonDoc[F("unit_of_measurement")] = cfg.unit;
+        jsonDoc[F("icon")] = cfg.icon;
+        if (cfg.divide_by_1000) jsonDoc[F("value_template")] = F("{{ value|float / 1000 }}");
+        else                    jsonDoc[F("value_template")] = F("{{ value }}");
         String jsonString;
         serializeJson(jsonDoc, jsonString);
         if (!mqtt_client.publish(topic.c_str(), jsonString.c_str(), true))
@@ -619,36 +622,36 @@ void sendHomeAssistantConfig(const char *sensorname, const char *sensorid,
 }
 
 void haDiscovery(const String& setHomeAssistant) {
-    sendHomeAssistantConfig("L1 instant power usage",       "l1_instant_power_usage",    "power",       setHomeAssistant);
-    sendHomeAssistantConfig("L1 Instant Power Current",     "l1_instant_power_current",  "current",     setHomeAssistant);
-    sendHomeAssistantConfig("L1 Voltage",                   "l1_voltage",                "voltage",     setHomeAssistant);
-    sendHomeAssistantConfig("L2 instant power usage",       "l2_instant_power_usage",    "power",       setHomeAssistant);
-    sendHomeAssistantConfig("L2 Instant Power Current",     "l2_instant_power_current",  "current",     setHomeAssistant);
-    sendHomeAssistantConfig("L2 Voltage",                   "l2_voltage",                "voltage",     setHomeAssistant);
-    sendHomeAssistantConfig("L3 instant power usage",       "l3_instant_power_usage",    "power",       setHomeAssistant);
-    sendHomeAssistantConfig("L3 Instant Power Current",     "l3_instant_power_current",  "current",     setHomeAssistant);
-    sendHomeAssistantConfig("L3 Voltage",                   "l3_voltage",                "voltage",     setHomeAssistant);
-    sendHomeAssistantConfig("L1 Instant Power Return",      "l1_instant_power_return",   "power",       setHomeAssistant);
-    sendHomeAssistantConfig("L2 Instant Power Return",      "l2_instant_power_return",   "power",       setHomeAssistant);
-    sendHomeAssistantConfig("L3 Instant Power Return",      "l3_instant_power_return",   "power",       setHomeAssistant);
-    sendHomeAssistantConfig("Actual Power Consumption",     "actual_consumption",        "power",       setHomeAssistant);
-    sendHomeAssistantConfig("Actual Return Delivery",       "actual_returndelivery",     "power",       setHomeAssistant);
-    sendHomeAssistantConfig("Gas Usage",                    "gas_meter_m3",              "gas",         setHomeAssistant);
-    sendHomeAssistantConfig("Consumption High Tariff",      "consumption_high_tarif",    "energy",      setHomeAssistant);
-    sendHomeAssistantConfig("Consumption Low Tariff",       "consumption_low_tarif",     "energy",      setHomeAssistant);
-    sendHomeAssistantConfig("Return Delivery High Tariff",  "returndelivery_high_tarif", "energy",      setHomeAssistant);
-    sendHomeAssistantConfig("Return Delivery Low Tariff",   "returndelivery_low_tarif",  "energy",      setHomeAssistant);
-    sendHomeAssistantConfig("Long Power Outages",           "long_power_outages",        "outages",     setHomeAssistant);
-    sendHomeAssistantConfig("Short Power Outages",          "short_power_outages",       "outages",     setHomeAssistant);
-    sendHomeAssistantConfig("Short Power Drops",            "short_power_drops",         "outages",     setHomeAssistant);
-    sendHomeAssistantConfig("Short Power Peaks",            "short_power_peaks",         "outages",     setHomeAssistant);
-    sendHomeAssistantConfig("Actual Tariff Group",          "actual_tarif_group",        "tarif",       setHomeAssistant);
-    sendHomeAssistantConfig("DSRM Version",                 "dsrm_version",              "other",       setHomeAssistant);
-    sendHomeAssistantConfig("DSRM DateTime",                "dsrm_datetime",             "date",        setHomeAssistant);
-    sendHomeAssistantConfig("DSRM Equipment ID",            "dsrm_equipment_id",         "equipementid",setHomeAssistant);
-    sendHomeAssistantConfig("GAS Meter Type",               "gas_meter_type",            "gasdevice",   setHomeAssistant);
-    sendHomeAssistantConfig("GAS Equipment ID",             "gas_equipment_id",          "gasdevice",   setHomeAssistant);
-    sendHomeAssistantConfig("IP Address",                   "ip_address",                "ipaddress",   setHomeAssistant);
+    sendHomeAssistantConfig(F("L1 instant power usage"),       F("l1_instant_power_usage"),    F("power"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("L1 Instant Power Current"),     F("l1_instant_power_current"),  F("current"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("L1 Voltage"),                   F("l1_voltage"),                F("voltage"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("L2 instant power usage"),       F("l2_instant_power_usage"),    F("power"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("L2 Instant Power Current"),     F("l2_instant_power_current"),  F("current"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("L2 Voltage"),                   F("l2_voltage"),                F("voltage"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("L3 instant power usage"),       F("l3_instant_power_usage"),    F("power"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("L3 Instant Power Current"),     F("l3_instant_power_current"),  F("current"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("L3 Voltage"),                   F("l3_voltage"),                F("voltage"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("L1 Instant Power Return"),      F("l1_instant_power_return"),   F("power"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("L2 Instant Power Return"),      F("l2_instant_power_return"),   F("power"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("L3 Instant Power Return"),      F("l3_instant_power_return"),   F("power"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("Actual Power Consumption"),     F("actual_consumption"),        F("power"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("Actual Return Delivery"),       F("actual_returndelivery"),     F("power"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("Gas Usage"),                    F("gas_meter_m3"),              F("gas"),         setHomeAssistant);
+    sendHomeAssistantConfig(F("Consumption High Tariff"),      F("consumption_high_tarif"),    F("energy"),      setHomeAssistant);
+    sendHomeAssistantConfig(F("Consumption Low Tariff"),       F("consumption_low_tarif"),     F("energy"),      setHomeAssistant);
+    sendHomeAssistantConfig(F("Return Delivery High Tariff"),  F("returndelivery_high_tarif"), F("energy"),      setHomeAssistant);
+    sendHomeAssistantConfig(F("Return Delivery Low Tariff"),   F("returndelivery_low_tarif"),  F("energy"),      setHomeAssistant);
+    sendHomeAssistantConfig(F("Long Power Outages"),           F("long_power_outages"),        F("outages"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("Short Power Outages"),          F("short_power_outages"),       F("outages"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("Short Power Drops"),            F("short_power_drops"),         F("outages"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("Short Power Peaks"),            F("short_power_peaks"),         F("outages"),     setHomeAssistant);
+    sendHomeAssistantConfig(F("Actual Tariff Group"),          F("actual_tarif_group"),        F("tarif"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("DSRM Version"),                 F("dsrm_version"),              F("other"),       setHomeAssistant);
+    sendHomeAssistantConfig(F("DSRM DateTime"),                F("dsrm_datetime"),             F("date"),        setHomeAssistant);
+    sendHomeAssistantConfig(F("DSRM Equipment ID"),            F("dsrm_equipment_id"),         F("equipementid"),setHomeAssistant);
+    sendHomeAssistantConfig(F("GAS Meter Type"),               F("gas_meter_type"),            F("gasdevice"),   setHomeAssistant);
+    sendHomeAssistantConfig(F("GAS Equipment ID"),             F("gas_equipment_id"),          F("gasdevice"),   setHomeAssistant);
+    sendHomeAssistantConfig(F("IP Address"),                   F("ip_address"),                F("ipaddress"),   setHomeAssistant);
 
     // v2.7 had "Update Available" en "Latest Version" sensors: retained config en state opruimen
     static const char* const oldSensors[] = {"update_available", "latest_version"};
@@ -734,9 +737,11 @@ void send_data_to_broker() {
             }
         } else {
             const char* current = metricsFields[i].stringValue;
-            if (forceAll || strncmp(current, prevStringValues[i], 63) != 0) {
-                strlcpy(prevStringValues[i], current, sizeof(prevStringValues[i]));
-                send_metric(metricsFields[i].name, prevStringValues[i]);
+            uint32_t h = 2166136261UL;                       // FNV-1a
+            for (const char *c = current; *c; c++) { h ^= (uint8_t)*c; h *= 16777619UL; }
+            if (forceAll || h != prevStringHash[i]) {
+                prevStringHash[i] = h;
+                send_metric(metricsFields[i].name, current);
                 sent++;
             }
         }
@@ -1065,7 +1070,7 @@ void setup_webserver() {
 // * Setup Main                     *
 // **********************************
 void setup() {
-    EEPROM.begin(512);
+    EEPROM.begin(256);   // hoogste gebruikte adres is 173; buffer staat permanent in RAM
     Serial.setRxBufferSize(1024);
     Serial.begin(BAUD_RATE, SERIAL_8N1, SERIAL_FULL);
     Serial.setTimeout(200);   // een regel komt binnen ~10 ms; voorkomt 1 s blokkeren
