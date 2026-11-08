@@ -36,6 +36,16 @@
 #include "webui.h"
 #include "crashguard.h"
 
+// * Optioneel: reserve WiFi in secrets.h (staat niet in git, zie secrets.h.example).
+//   Wordt alleen gebruikt als de ESP geen opgeslagen WiFi gegevens heeft.
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#endif
+#ifndef WIFI_FALLBACK_SSID
+  #define WIFI_FALLBACK_SSID ""
+  #define WIFI_FALLBACK_PASS ""
+#endif
+
 // * Forward declarations
 void tick();
 String read_eeprom(int offset, int len);
@@ -366,7 +376,9 @@ void handleApiInfo(AsyncWebServerRequest *request) {
     resp->print(F(",\"reset_reason\":")); printJsonString(*resp, ESP.getResetReason().c_str());
     resp->printf_P(PSTR(",\"chip_id\":\"%06X\""), ESP.getChipId());
     resp->printf_P(PSTR(",\"cpu_mhz\":%u"), ESP.getCpuFreqMHz());
-    resp->printf_P(PSTR(",\"flash_size\":%u"), ESP.getFlashChipRealSize());
+    // Wijkt de ingestelde flash grootte (build) af van de echte chip, dan staan WiFi en
+    // EEPROM op een andere plek dan verwacht: instellingen lijken dan "gewist".
+    resp->printf_P(PSTR(",\"flash_size\":%u,\"flash_config\":%u"), ESP.getFlashChipRealSize(), ESP.getFlashChipSize());
     resp->printf_P(PSTR(",\"sketch_size\":%u,\"sketch_free\":%u"), ESP.getSketchSize(), ESP.getFreeSketchSpace());
     resp->printf_P(PSTR(",\"heap_free\":%u,\"heap_max_block\":%u,\"heap_frag\":%u"),
         ESP.getFreeHeap(), ESP.getMaxFreeBlockSize(), ESP.getHeapFragmentation());
@@ -1284,6 +1296,16 @@ void setup() {
     wifiManager.addParameter(&CUSTOM_MQTT_PASS);
     wifiManager.addParameter(&CUSTOM_MQTT_ROOT_TOPIC);
     wifiManager.addParameter(&CUSTOM_HA_DISCOVERY);
+
+    // Geen opgeslagen WiFi (bijv. na een build met andere Flash Size)? Eerst de reserve
+    // gegevens uit secrets.h proberen. Lukt dat, dan worden ze opgeslagen (persistent) en
+    // is WiFiManager niet nodig: de ESP herstelt zichzelf, ook op afstand.
+    if (WIFI_FALLBACK_SSID[0] != '\0' && WiFi.SSID().length() == 0) {
+        DEBUG_PRINTLN(F("Geen opgeslagen WiFi, probeer reserve WiFi uit secrets.h..."));
+        WiFi.begin(WIFI_FALLBACK_SSID, WIFI_FALLBACK_PASS);
+        const unsigned long t0 = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - t0 < 30000) delay(250);
+    }
 
     // Setup access point (bij geen WiFi): optioneel met wachtwoord, zodat niet iedereen
     // in de buurt je WiFi/MQTT kan wijzigen als je router even uit staat.

@@ -36,3 +36,5 @@
 
 # PlatformIo
 .pio/
+# Eigen WiFi gegevens
+esp8266_p1meter/secrets.h

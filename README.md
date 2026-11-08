@@ -134,6 +134,10 @@ Gebruik een **10kΩ pull-up weerstand** tussen 3.3V en de DATA (RXD) pin van de 
 
 ---
 
+> **Flash Size vast houden.** De WiFi gegevens en de EEPROM (MQTT instellingen) staan aan het einde van de flash, op een plek die afhangt van **Tools → Flash Size**. Compileer je een update met een andere Flash Size dan de vorige build, dan "verdwijnen" die instellingen en start de ESP het setup netwerk. Gebruik daarom altijd dezelfde instelling, bijvoorbeeld `4MB (FS:2MB OTA:~1019KB)`. Op `/info` staat een waarschuwing als de build niet bij de chip past.
+>
+> **Reserve WiFi (optioneel).** Kopieer `secrets.h.example` naar `secrets.h` en vul je WiFi in. Heeft de ESP geen opgeslagen WiFi, dan verbindt hij daarmee in plaats van in het setup netwerk te blijven hangen. `secrets.h` staat niet in git; zet een `.bin` met je eigen WiFi erin nooit in een openbare release.
+
 > **Na flashen via USB: haal de stroom er één keer helemaal af** (USB en P1-kabel los) voordat je de ESP aan de meter hangt. De ESP8266 onthoudt na een USB-flash de "flash-modus"; de eerste software-herstart (bijvoorbeeld na een update via `/update` of `/restart`) blijft dan hangen tot er een echte stroomonderbreking komt. Na één keer stroomloos zijn alle updates en herstarts op afstand veilig.
 
 ## Eerste configuratie
