@@ -11,6 +11,7 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <Updater.h>
+#include <StreamString.h>
 
 //for reboot api
 #define WEBSERVER_H
@@ -33,6 +34,7 @@
 #include "settings.h"
 #include "variables.h"
 #include "webui.h"
+#include "crashguard.h"
 
 // * Forward declarations
 void tick();
@@ -217,7 +219,13 @@ void handleVersion(AsyncWebServerRequest *request) {
 
 void handleRestart(AsyncWebServerRequest *request) {
     if (!authOK(request)) return;
-    request->send(200, "text/plain", "Server is restarting in 5 seconds, restarting can take up to 1 minute...");
+    if (request->hasParam("safe")) {
+        crashguardForceSafeNextBoot();
+        request->send(200, "text/plain", "Restarting in safe mode in 5 seconds...");
+    } else {
+        // Normale herstart: crash-teller op 0, dus ook weer uit veilige modus
+        request->send(200, "text/plain", "Server is restarting in 5 seconds, restarting can take up to 1 minute...");
+    }
     DEBUG_PRINTLN("Server is restarting in 5 seconds...");
     scheduleRestart(restartInterval);
 }
@@ -321,7 +329,7 @@ void handleApiLive(AsyncWebServerRequest *request) {
     resp->print('{');
     resp->printf_P(PSTR("\"age\":%ld,"), stats.telegramsOk ? (long)(now - stats.lastTelegramAt) : -1L);
     resp->printf_P(PSTR("\"ok\":%u,\"crc\":%u,"), stats.telegramsOk, stats.crcErrors);
-    resp->printf_P(PSTR("\"mqtt\":%s,"), mqtt_client.connected() ? "true" : "false");
+    resp->printf_P(PSTR("\"mqtt\":%s,\"safe\":%s,"), mqtt_client.connected() ? "true" : "false", safeMode ? "true" : "false");
     resp->printf_P(PSTR("\"interval\":%lu,"), updateInterval);
     resp->print(F("\"ts\":"));  printJsonString(*resp, DSRMTIMESTAMP);
     resp->printf_P(PSTR(",\"tarif\":%ld"), ACTUAL_TARIF_GROUP);
@@ -380,6 +388,8 @@ void handleApiInfo(AsyncWebServerRequest *request) {
     resp->printf_P(PSTR(",\"last_telegram_age\":%ld"), stats.telegramsOk ? (long)(now - stats.lastTelegramAt) : -1L);
     resp->printf_P(PSTR(",\"max_loop_us\":%lu"), stats.maxLoopUs);
     resp->printf_P(PSTR(",\"interval\":%lu"), updateInterval);
+    resp->print(','); printCrashJson(*resp);
+    resp->print(F(",\"boot_reason\":")); printJsonString(*resp, bootReasonText().c_str());
     resp->printf_P(PSTR(",\"ha_discovery\":%s"), HA_DISCOVERY ? "true" : "false");
     resp->print(F(",\"dsmr_version\":")); printJsonString(*resp, DSRMVERSION);
     resp->print(F(",\"meter_id\":"));     printJsonString(*resp, EQUIPMENTID);
@@ -616,7 +626,8 @@ SensorConfig getSensorConfig(const String& deviceclass) {
 
 // Namen/ids staan in flash (F()), niet in RAM
 void sendHomeAssistantConfig(const __FlashStringHelper *sensorname, const __FlashStringHelper *sensorid_f,
-                             const __FlashStringHelper *deviceclass, const String& setHomeAssistant) {
+                             const __FlashStringHelper *deviceclass, const String& setHomeAssistant,
+                             bool diagnostic) {
     const String sensorid(sensorid_f);
     topic = String(MQTT_ROOT_TOPIC) + "/" + sensorid + F("/config");
     if (setHomeAssistant == "on") {
@@ -637,6 +648,14 @@ void sendHomeAssistantConfig(const __FlashStringHelper *sensorname, const __Flas
         if (strcmp(cfg.state_class,     "none") != 0) jsonDoc[F("state_class")]         = cfg.state_class;
         if (strcmp(cfg.unit,            "none") != 0) jsonDoc[F("unit_of_measurement")] = cfg.unit;
         jsonDoc[F("icon")] = cfg.icon;
+        if (diagnostic) {
+            // Blijft zichtbaar als de meter offline / in veilige modus is
+            jsonDoc[F("entity_category")] = F("diagnostic");
+            if (strcmp_P(sensorid.c_str(), PSTR("reset_reason")) == 0)
+                jsonDoc[F("json_attributes_topic")] = String(MQTT_ROOT_TOPIC) + F("/crash/state");
+        } else {
+            jsonDoc[F("availability_topic")] = statusTopic;
+        }
         if (cfg.divide_by_1000) jsonDoc[F("value_template")] = F("{{ value|float / 1000 }}");
         else                    jsonDoc[F("value_template")] = F("{{ value }}");
         String jsonString;
@@ -651,36 +670,39 @@ void sendHomeAssistantConfig(const __FlashStringHelper *sensorname, const __Flas
 }
 
 void haDiscovery(const String& setHomeAssistant) {
-    sendHomeAssistantConfig(F("L1 instant power usage"),       F("l1_instant_power_usage"),    F("power"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("L1 Instant Power Current"),     F("l1_instant_power_current"),  F("current"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("L1 Voltage"),                   F("l1_voltage"),                F("voltage"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("L2 instant power usage"),       F("l2_instant_power_usage"),    F("power"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("L2 Instant Power Current"),     F("l2_instant_power_current"),  F("current"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("L2 Voltage"),                   F("l2_voltage"),                F("voltage"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("L3 instant power usage"),       F("l3_instant_power_usage"),    F("power"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("L3 Instant Power Current"),     F("l3_instant_power_current"),  F("current"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("L3 Voltage"),                   F("l3_voltage"),                F("voltage"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("L1 Instant Power Return"),      F("l1_instant_power_return"),   F("power"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("L2 Instant Power Return"),      F("l2_instant_power_return"),   F("power"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("L3 Instant Power Return"),      F("l3_instant_power_return"),   F("power"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("Actual Power Consumption"),     F("actual_consumption"),        F("power"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("Actual Return Delivery"),       F("actual_returndelivery"),     F("power"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("Gas Usage"),                    F("gas_meter_m3"),              F("gas"),         setHomeAssistant);
-    sendHomeAssistantConfig(F("Consumption High Tariff"),      F("consumption_high_tarif"),    F("energy"),      setHomeAssistant);
-    sendHomeAssistantConfig(F("Consumption Low Tariff"),       F("consumption_low_tarif"),     F("energy"),      setHomeAssistant);
-    sendHomeAssistantConfig(F("Return Delivery High Tariff"),  F("returndelivery_high_tarif"), F("energy"),      setHomeAssistant);
-    sendHomeAssistantConfig(F("Return Delivery Low Tariff"),   F("returndelivery_low_tarif"),  F("energy"),      setHomeAssistant);
-    sendHomeAssistantConfig(F("Long Power Outages"),           F("long_power_outages"),        F("outages"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("Short Power Outages"),          F("short_power_outages"),       F("outages"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("Short Power Drops"),            F("short_power_drops"),         F("outages"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("Short Power Peaks"),            F("short_power_peaks"),         F("outages"),     setHomeAssistant);
-    sendHomeAssistantConfig(F("Actual Tariff Group"),          F("actual_tarif_group"),        F("tarif"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("DSRM Version"),                 F("dsrm_version"),              F("other"),       setHomeAssistant);
-    sendHomeAssistantConfig(F("DSRM DateTime"),                F("dsrm_datetime"),             F("date"),        setHomeAssistant);
-    sendHomeAssistantConfig(F("DSRM Equipment ID"),            F("dsrm_equipment_id"),         F("equipementid"),setHomeAssistant);
-    sendHomeAssistantConfig(F("GAS Meter Type"),               F("gas_meter_type"),            F("gasdevice"),   setHomeAssistant);
-    sendHomeAssistantConfig(F("GAS Equipment ID"),             F("gas_equipment_id"),          F("gasdevice"),   setHomeAssistant);
-    sendHomeAssistantConfig(F("IP Address"),                   F("ip_address"),                F("ipaddress"),   setHomeAssistant);
+    sendHomeAssistantConfig(F("L1 instant power usage"),       F("l1_instant_power_usage"),    F("power"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L1 Instant Power Current"),     F("l1_instant_power_current"),  F("current"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L1 Voltage"),                   F("l1_voltage"),                F("voltage"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L2 instant power usage"),       F("l2_instant_power_usage"),    F("power"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L2 Instant Power Current"),     F("l2_instant_power_current"),  F("current"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L2 Voltage"),                   F("l2_voltage"),                F("voltage"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L3 instant power usage"),       F("l3_instant_power_usage"),    F("power"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L3 Instant Power Current"),     F("l3_instant_power_current"),  F("current"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L3 Voltage"),                   F("l3_voltage"),                F("voltage"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L1 Instant Power Return"),      F("l1_instant_power_return"),   F("power"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L2 Instant Power Return"),      F("l2_instant_power_return"),   F("power"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("L3 Instant Power Return"),      F("l3_instant_power_return"),   F("power"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Actual Power Consumption"),     F("actual_consumption"),        F("power"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Actual Return Delivery"),       F("actual_returndelivery"),     F("power"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Gas Usage"),                    F("gas_meter_m3"),              F("gas"),         setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Consumption High Tariff"),      F("consumption_high_tarif"),    F("energy"),      setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Consumption Low Tariff"),       F("consumption_low_tarif"),     F("energy"),      setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Return Delivery High Tariff"),  F("returndelivery_high_tarif"), F("energy"),      setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Return Delivery Low Tariff"),   F("returndelivery_low_tarif"),  F("energy"),      setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Long Power Outages"),           F("long_power_outages"),        F("outages"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Short Power Outages"),          F("short_power_outages"),       F("outages"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Short Power Drops"),            F("short_power_drops"),         F("outages"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Short Power Peaks"),            F("short_power_peaks"),         F("outages"),     setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Actual Tariff Group"),          F("actual_tarif_group"),        F("tarif"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("DSRM Version"),                 F("dsrm_version"),              F("other"),       setHomeAssistant, false);
+    sendHomeAssistantConfig(F("DSRM DateTime"),                F("dsrm_datetime"),             F("date"),        setHomeAssistant, false);
+    sendHomeAssistantConfig(F("DSRM Equipment ID"),            F("dsrm_equipment_id"),         F("equipementid"),setHomeAssistant, false);
+    sendHomeAssistantConfig(F("GAS Meter Type"),               F("gas_meter_type"),            F("gasdevice"),   setHomeAssistant, false);
+    sendHomeAssistantConfig(F("GAS Equipment ID"),             F("gas_equipment_id"),          F("gasdevice"),   setHomeAssistant, false);
+    sendHomeAssistantConfig(F("Reset Reason"),                 F("reset_reason"),              F("other"),       setHomeAssistant, true);
+    sendHomeAssistantConfig(F("Crash Count"),                  F("crash_count"),               F("other"),       setHomeAssistant, true);
+    sendHomeAssistantConfig(F("Safe Mode"),                    F("safe_mode"),                 F("other"),       setHomeAssistant, true);
+    sendHomeAssistantConfig(F("IP Address"),                   F("ip_address"),                F("ipaddress"),   setHomeAssistant, false);
 
     // v2.7 had "Update Available" en "Latest Version" sensors: retained config en state opruimen
     static const char* const oldSensors[] = {"update_available", "latest_version"};
@@ -712,11 +734,55 @@ void tick() {
 // **********************************
 // * MQTT                           *
 // **********************************
+// {root}/status: "online" of "offline". "offline" komt ook als MQTT "last will" van de
+// broker wanneer de ESP wegvalt (crash, stroom, WiFi). In veilige modus ook "offline",
+// zodat de P1 sensors in HA op "niet beschikbaar" gaan.
+char statusTopic[48];
+
+// Diagnose naar MQTT, na elke (her)verbinding. Alles retained, behalve het event.
+void publishDiagnostics() {
+    char t[64];
+    char v[16];
+    snprintf(t, sizeof(t), "%s/reset_reason/state", MQTT_ROOT_TOPIC);
+    mqtt_client.publish(t, bootReasonText().c_str(), true);
+    snprintf(t, sizeof(t), "%s/crash_count/state", MQTT_ROOT_TOPIC);
+    snprintf(v, sizeof(v), "%u", bootState.crashCount);
+    mqtt_client.publish(t, v, true);
+    snprintf(t, sizeof(t), "%s/safe_mode/state", MQTT_ROOT_TOPIC);
+    mqtt_client.publish(t, safeMode ? "ON" : "OFF", true);
+
+    // Crash details (ook als attributen van de "Reset Reason" sensor in HA)
+    String js = "{";
+    { StreamString ss; printCrashJson(ss); js += ss; }
+    js += F(",\"version\":\"" APPVERSION "\",\"ip\":\"");
+    js += IPADDRESS;
+    js += "\"}";
+    snprintf(t, sizeof(t), "%s/crash/state", MQTT_ROOT_TOPIC);
+    mqtt_client.publish(t, js.c_str(), true);
+
+    // Eenmalig per opstart een event (niet retained) voor HA automations met een MQTT trigger
+    static bool eventSent = false;
+    if (!eventSent) {
+        eventSent = true;
+        String ev = F("{\"event\":\"");
+        ev += safeMode ? F("safe_mode") : (crashedThisBoot ? F("crash") : F("boot"));
+        ev += F("\",\"reason\":\"");
+        ev += bootReasonText();
+        ev += F("\",\"crash_count\":");
+        ev += bootState.crashCount;
+        ev += F(",\"version\":\"" APPVERSION "\"}");
+        snprintf(t, sizeof(t), "%s/event", MQTT_ROOT_TOPIC);
+        mqtt_client.publish(t, ev.c_str(), false);
+    }
+}
+
 bool mqtt_reconnect() {
     DEBUG_PRINTLN("Attempting MQTT reconnect...");
-    if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS)) {
+    if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS, statusTopic, 1, true, "offline")) {
         DEBUG_PRINTLN(F("MQTT connected!"));
         stats.mqttReconnects++;
+        mqtt_client.publish(statusTopic, safeMode ? "offline" : "online", true);
+        publishDiagnostics();
         return true;
     } else {
         DEBUG_PRINT(F("MQTT Connection failed: rc="));
@@ -1134,6 +1200,7 @@ void setup_webserver() {
 // * Setup Main                     *
 // **********************************
 void setup() {
+    crashguardBoot();   // als eerste: crash herkennen en eventueel veilige modus kiezen
     EEPROM.begin(256);   // hoogste gebruikte adres is 173; buffer staat permanent in RAM
     Serial.setRxBufferSize(1024);
     Serial.begin(BAUD_RATE, SERIAL_8N1, SERIAL_FULL);
@@ -1227,6 +1294,7 @@ void setup() {
 
     DEBUG_PRINTF("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
     mqtt_client.setServer(MQTT_HOST, atoi(MQTT_PORT));
+    snprintf(statusTopic, sizeof(statusTopic), "%s/status", MQTT_ROOT_TOPIC);
     mqtt_client.setBufferSize(700);
     // Kortere timeouts: een onbereikbare broker mag de P1 uitlezing niet lang blokkeren
     mqtt_client.setSocketTimeout(5);
@@ -1252,8 +1320,10 @@ void loop() {
     if (now < lastMillis) uptimeRollovers++;
     lastMillis = now;
 
-    // P1 poort altijd leegtrekken — ook als WiFi/MQTT weg is
-    read_p1_hardwareserial();
+    crashguardLoop((uint32_t)(uptimeMs() / 1000ULL));
+
+    // P1 poort altijd leegtrekken — ook als WiFi/MQTT weg is. In veilige modus niet.
+    if (!safeMode) read_p1_hardwareserial();
 
     ArduinoOTA.handle();
     MDNS.update();
@@ -1273,15 +1343,25 @@ void loop() {
 
     // --- WiFi check & reconnect ---
     static bool wifiWasConnected = true;
+    static unsigned long wifiLostAt = 0;
     if (WiFi.status() != WL_CONNECTED) {
+        if (wifiWasConnected) {
+            wifiLostAt = now;
+            LAST_WIFI_RECONNECT_ATTEMPT = now;   // eerst de automatische reconnect een kans geven
+        }
         wifiWasConnected    = false;
         haDiscoverySetupRun = false;
         deltaInitialized    = false;
+        // Te lang geen WiFi: herstart (lost vastgelopen WiFi stack op)
+        if (now - wifiLostAt > WIFI_RESTART_AFTER) {
+            DEBUG_PRINTLN(F("WiFi te lang weg, herstart..."));
+            ESP.restart();
+        }
         if (now - LAST_WIFI_RECONNECT_ATTEMPT > WIFI_RECONNECT_INTERVAL) {
             LAST_WIFI_RECONNECT_ATTEMPT = now;
             stats.wifiReconnects++;
             DEBUG_PRINTLN(F("WiFi verbroken, probeer opnieuw te verbinden..."));
-            WiFi.disconnect();
+            // Geen WiFi.disconnect(): die wist bij persistent(true) de opgeslagen WiFi gegevens!
             WiFi.reconnect();
         }
         return;
@@ -1300,7 +1380,7 @@ void loop() {
             DEBUG_PRINTLN(F("MQTT verbroken, probeer opnieuw te verbinden..."));
             if (mqtt_reconnect()) {
                 DEBUG_PRINTLN(F("MQTT herverbonden!"));
-                if (HA_DISCOVERY && !haDiscoverySetupRun) {
+                if (HA_DISCOVERY && !haDiscoverySetupRun && !safeMode) {
                     haDiscovery("on");
                     haDiscoverySetupRun = true;
                 }
@@ -1310,6 +1390,8 @@ void loop() {
     }
 
     mqtt_client.loop();
+
+    if (safeMode) return;   // veilige modus: geen discovery / data, alleen status
 
     if (HA_DISCOVERY && !haDiscoverySetupRun) {
         haDiscovery("on");

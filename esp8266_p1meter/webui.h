@@ -53,6 +53,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 </style></head><body>
 <header><div class="hw"><div class="brand">P1 Meter <small id="ver"></small></div>
 <nav><a href="/" data-v="dash">Dashboard</a><a href="/info" data-v="info">Info</a><a href="/settings" data-v="settings">Instellingen</a><a href="/files" data-v="files">Bestanden</a><a href="/update" data-v="update">Update</a></nav></div></header>
+<div id="safe" class="hide" style="background:var(--bad);color:#fff;text-align:center;padding:8px 16px;font-weight:500">Veilige modus — na herhaalde crashes staan P1 uitlezing en MQTT data uit. <a href="/info" style="color:#fff">Details</a></div>
 <main id="app"></main>
 <script>
 const $=s=>document.querySelector(s);
@@ -89,7 +90,7 @@ hist.push(d.p-d.r);if(hist.length>150)hist.shift();spark();
 $('#ph').innerHTML=d.ph.map((x,i)=>(i==0||x[3]>0)?`<tr><td><b>L${i+1}</b></td><td class="r use">${n(x[0],0)} W</td><td class="r ret">${n(x[1],0)} W</td><td class="r">${n(x[2]/1000,0)} A</td><td class="r">${n(x[3]/1000,1)} V</td></tr>`:'').join('');
 $('#tot').innerHTML=`<tr><td>Verbruik T1 (laag)</td><td class="r">${n(d.t1/1000,3)} kWh</td></tr><tr><td>Verbruik T2 (normaal)</td><td class="r">${n(d.t2/1000,3)} kWh</td></tr><tr><td>Teruglevering T1</td><td class="r">${n(d.r1/1000,3)} kWh</td></tr><tr><td>Teruglevering T2</td><td class="r">${n(d.r2/1000,3)} kWh</td></tr><tr><td>Gas</td><td class="r">${n(d.gas/1000,3)} m³</td></tr>`;
 $('#ev').innerHTML=`<tr><td>Korte onderbrekingen</td><td class="r">${d.ev[0]}</td></tr><tr><td>Lange onderbrekingen</td><td class="r">${d.ev[1]}</td></tr><tr><td>Spanningsdips L1</td><td class="r">${d.ev[2]}</td></tr><tr><td>Spanningspieken L1</td><td class="r">${d.ev[3]}</td></tr>`;
-const fresh=d.age>=0&&d.age<5000;
+$('#safe').classList.toggle('hide',!d.safe);const fresh=d.age>=0&&d.age<5000;
 $('#st').innerHTML=`<span><span class="dot ${fresh?'ok':'bad'}"></span>Telegram: ${age(d.age)}</span><span><span class="dot ${d.mqtt?'ok':'bad'}"></span>MQTT ${d.mqtt?'verbonden':'niet verbonden'}</span><span>Interval: ${d.interval/1000} s</span><span>Telegrammen: ${d.ok} &middot; CRC fouten: ${d.crc}</span><span>Meter tijd: ${esc(d.ts)}</span>`;
 }),1000)}
 function spark(){const el=$('#sp');if(!el||hist.length<2)return;const mx=Math.max(...hist,10),mn=Math.min(...hist,0),rg=mx-mn||1,w=300/(150-1);
@@ -98,18 +99,21 @@ el.innerHTML=`<line x1="0" x2="300" y1="${z}" y2="${z}" stroke="currentColor" st
 
 /* ---------- Info ---------- */
 function vInfo(){
-app.innerHTML=`<div id="inf"></div><div class="card"><h2>Acties</h2><div class="actions"><a class="btn sec" href="/telegram" target="_blank">Telegram JSON</a><a class="btn sec" href="/api/info" target="_blank">Info JSON</a><button class="danger" id="rb">Herstarten</button></div><div id="rbm"></div></div>
+app.innerHTML=`<div id="inf"></div><div class="card"><h2>Acties</h2><div class="actions"><a class="btn sec" href="/telegram" target="_blank">Telegram JSON</a><a class="btn sec" href="/api/info" target="_blank">Info JSON</a><button class="danger" id="rb">Herstarten</button><button class="sec" id="rs">Herstart in veilige modus</button></div><div id="rbm"></div></div>
 <div class="card"><h2>Debug: ruw telegram</h2><p class="mut">Vangt het eerstvolgende geldige telegram op zoals de meter het stuurt. Gebruikt alleen tijdens debuggen 2 KB geheugen.</p>
 <div class="actions"><button class="sec" id="rw">Ruw telegram ophalen</button><button class="sec hide" id="rc">Kopiëren</button><button class="sec hide" id="rf">Geheugen vrijgeven</button></div><div id="rm"></div><pre id="rp" class="hide"></pre></div>`;
 $('#rw').onclick=()=>{$('#rw').disabled=true;msg($('#rm'),'Wachten op volgend telegram...');let n=0;
 const t=()=>fetch('/api/raw',{cache:'no-store'}).then(r=>r.text().then(x=>{if(r.status==200){$('#rm').innerHTML='';$('#rp').textContent=x;$('#rp').classList.remove('hide');$('#rc').classList.remove('hide');$('#rf').classList.remove('hide');$('#rw').disabled=false}else if(++n<30)setTimeout(t,1000);else{msg($('#rm'),'Geen geldig telegram ontvangen binnen 30 s.','bad');$('#rw').disabled=false}})).catch(e=>{msg($('#rm'),esc(e.message),'bad');$('#rw').disabled=false});t()};
 $('#rc').onclick=()=>{const x=$('#rp').textContent;(navigator.clipboard?navigator.clipboard.writeText(x):Promise.reject()).then(()=>msg($('#rm'),'Gekopieerd.','ok')).catch(()=>{const r=document.createRange();r.selectNodeContents($('#rp'));getSelection().removeAllRanges();getSelection().addRange(r)})};
 $('#rf').onclick=()=>api('/api/raw?free=1').then(()=>{$('#rp').classList.add('hide');$('#rc').classList.add('hide');$('#rf').classList.add('hide');msg($('#rm'),'Vrijgegeven.','ok')});
-$('#rb').onclick=()=>{if(!confirm('ESP herstarten?'))return;api('/restart').then(()=>waitReboot($('#rbm'))).catch(e=>msg($('#rbm'),esc(e.message),'bad'))};
+$('#rb').onclick=()=>{if(!confirm('ESP herstarten? (Start in normale modus, ook vanuit veilige modus.)'))return;api('/restart').then(()=>waitReboot($('#rbm'))).catch(e=>msg($('#rbm'),esc(e.message),'bad'))};
+$('#rs').onclick=()=>{if(!confirm('Herstarten in veilige modus? P1 uitlezing en MQTT data staan dan uit tot een normale herstart.'))return;api('/restart?safe=1').then(()=>waitReboot($('#rbm'))).catch(e=>msg($('#rbm'),esc(e.message),'bad'))};
 const T=(t,rows)=>`<div class="card"><h2>${t}</h2><table>${rows.map(r=>`<tr><td class="mut">${r[0]}</td><td class="r ${r[2]||''}">${r[1]}</td></tr>`).join('')}</table></div>`;
 every(()=>api('/api/info').then(d=>{
 const q=d.rssi>-60?'goed':d.rssi>-75?'redelijk':'zwak';
 $('#inf').innerHTML='<div class="grid">'+
+(()=>{$('#safe').classList.toggle('hide',!d.safe_mode);const c=d.last_crash;return T('Stabiliteit',[['Modus',d.safe_mode?'<span class="dot bad"></span>veilige modus':'<span class="dot ok"></span>normaal'],['Reden laatste start',esc(d.boot_reason)],['Crashes na elkaar',d.crash_count],['Laatste crash',c?esc(c.reason)+(c.meter_time?' <span class="mut">('+esc(c.meter_time)+')</span>':''):'geen'],...(c?[['Uptime bij crash',c.uptime?dur(c.uptime):'?'],['Vrij heap bij crash',c.free_heap?bytes(c.free_heap):'?'],['epc1 / excvaddr','<span class="mono">'+c.epc1+' / '+c.excvaddr+'</span>'],['Stack','<span class="mono">'+esc(c.stack||'-')+'</span>']]:[])])})()+
+
 T('Systeem',[['Firmware','v'+esc(d.version)],['Hostname',esc(d.hostname)],['Uptime',dur(d.uptime)],['Laatste reset',esc(d.reset_reason)],['Chip ID',d.chip_id],['CPU',d.cpu_mhz+' MHz'],['Core / SDK',esc(d.core)+' / '+esc(d.sdk).split('(')[0]],['Langste loop (10 s)',n(d.max_loop_us/1000,1)+' ms']])+
 T('Geheugen',[['Vrij heap',bytes(d.heap_free)],['Grootste blok',bytes(d.heap_max_block)],['Fragmentatie',d.heap_frag+' %'],['Flash',bytes(d.flash_size)],['Sketch',bytes(d.sketch_size)],['Vrij voor OTA',bytes(d.sketch_free)],['Bestandssysteem',bytes(d.fs_used)+' / '+bytes(d.fs_total)]])+
 T('WiFi',[['SSID',esc(d.ssid)],['Signaal',d.rssi+' dBm ('+q+')'],['Kanaal',d.channel],['IP',d.ip],['Gateway',d.gateway],['DNS',d.dns],['MAC',d.mac],['BSSID',d.bssid],['Reconnects',d.wifi_reconnects]])+

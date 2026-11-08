@@ -18,6 +18,7 @@ Software voor de ESP8266 die DSMR5 P1 slimme meter data uitleest en verstuurt na
 - [Eerste configuratie](#eerste-configuratie)
 - [MQTT topics](#mqtt-topics)
 - [Webinterface](#webinterface)
+- [Crash bewaking en veilige modus](#crash-bewaking-en-veilige-modus)
 - [REST API](#rest-api)
 - [Home Assistant Auto Discovery](#home-assistant-auto-discovery)
 - [JSON Telegram endpoint](#json-telegram-endpoint)
@@ -51,6 +52,7 @@ Verder uitgebreid met een volledige REST API, Home Assistant Auto Discovery, del
 | **Per-fase teruglevering** | L1, L2, L3 teruglevering als aparte MQTT topics |
 | **REST API** | 12 endpoints voor beheer, monitoring en configuratie |
 | **JSON telegram endpoint** | Laatste telegram beschikbaar als JSON via HTTP |
+| **Crash bewaking** | Crash-info bewaard en zichtbaar op `/info` en in HA; veilige modus na 3 crashes; online/offline status via MQTT last will |
 | **Webinterface** | Dashboard, device info, instellingen, bestandsbeheer en firmware update in de browser |
 | **Web OTA updater** | Firmware updaten via browser — GitHub download of eigen .bin upload |
 | **Versiecheck** | De update-pagina toont of er een nieuwere GitHub release is (check door je browser, niet door de ESP) |
@@ -216,6 +218,12 @@ Met de standaard root topic `homeassistant/sensor/p1meter`:
 | `.../dsrm_datetime/state` | Datum/tijd van het laatste telegram |
 | `.../dsrm_equipment_id/state` | Serienummer elektriciteitsmeter |
 | `.../ip_address/state` | Huidig IP-adres van de ESP |
+| `.../status` | `online` / `offline` (retained, ook MQTT last will). In veilige modus `offline` |
+| `.../reset_reason/state` | Reden van de laatste start, bv. `Exception 28`, `Hardware watchdog`, `Power On` |
+| `.../crash_count/state` | Aantal crashes kort na elkaar |
+| `.../safe_mode/state` | `ON` / `OFF` |
+| `.../crash/state` | JSON met crash details (ook attributen van de Reset Reason sensor) |
+| `.../event` | Eenmalig per opstart, niet retained: `{"event":"boot"\|"crash"\|"safe_mode", ...}` |
 
 > Waarden worden als integers verstuurd. Home Assistant past via de `value_template` de deling toe bij sensors met HA Auto Discovery.
 
@@ -254,6 +262,94 @@ De pagina haalt zelf data op via `/api/*`; de ESP rendert geen HTML. De webserve
 
 ---
 
+## Crash bewaking en veilige modus
+
+Bedoeld voor beheer op afstand: als er iets misgaat wil je het weten, en de ESP moet bereikbaar blijven.
+
+**Crash-info.** Bij een crash (exception, watchdog, panic) legt de ESP de reden, de fout-adressen, de uptime, het vrije geheugen en de tijd van de meter vast in RTC geheugen. Na de herstart zie je dat op `/info` (kaart *Stabiliteit*) en in Home Assistant. Een stroomonderbreking wist deze info.
+
+> De adressen (`epc1`, `stack`) zijn te vertalen naar regels code met de **ESP Exception Decoder** en het `.elf` bestand van precies die build. Bewaar daarom bij elke release de `.elf` (Arduino IDE: *Sketch → Export Compiled Binary* zet die in de `build` map).
+
+**Veilige modus.** Crasht de ESP 3 keer kort na elkaar (binnen 2 minuten na het opstarten), dan start hij in veilige modus:
+- wél: WiFi, alle webpagina's, `/update`, Arduino OTA, MQTT status
+- niet: P1 uitlezing, MQTT data, HA discovery
+
+Zo kun je een foute firmware altijd op afstand vervangen. Een normale herstart (`/restart` of de knop op `/info`) start weer in normale modus. Met `/restart?safe=1` kun je zelf in veilige modus starten.
+
+**MQTT last will.** Valt de ESP weg (crash, stroom, WiFi), dan zet de broker `.../status` op `offline`. Alle P1 sensors in HA gaan dan op *niet beschikbaar* in plaats van de laatste waarde te blijven tonen. De diagnose-sensors (*Reset Reason*, *Crash Count*, *Safe Mode*) blijven zichtbaar.
+
+**WiFi.** Bij verlies van WiFi probeert de ESP elke minuut opnieuw te verbinden en herstart hij na 30 minuten zonder WiFi.
+
+### Home Assistant voorbeelden
+
+Herstart via de API (pas het IP-adres aan):
+
+```yaml
+rest_command:
+  p1meter_restart:
+    url: "http://192.168.1.50/restart"
+```
+
+Automatisch herstarten uit veilige modus, maximaal één keer per uur (anders kan een foute firmware blijven rondgaan: herstart → 3 crashes → veilige modus → herstart ...):
+
+```yaml
+automation:
+  - alias: "P1 meter: herstart uit veilige modus"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.p1_meter_safe_mode
+        to: "ON"
+        for: "00:02:00"
+    condition:
+      - condition: template
+        value_template: >
+          {{ this.attributes.last_triggered is none or
+             (now() - this.attributes.last_triggered).total_seconds() > 3600 }}
+    action:
+      - service: notify.notify
+        data:
+          message: "P1 meter in veilige modus na crash: {{ states('sensor.p1_meter_reset_reason') }}. Herstart..."
+      - service: rest_command.p1meter_restart
+```
+
+Melding bij elke crash (via het MQTT event):
+
+```yaml
+automation:
+  - alias: "P1 meter: crash melding"
+    trigger:
+      - platform: mqtt
+        topic: "homeassistant/sensor/p1meter/event"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.payload_json.event in ['crash', 'safe_mode'] }}"
+    action:
+      - service: notify.notify
+        data:
+          message: "P1 meter {{ trigger.payload_json.event }}: {{ trigger.payload_json.reason }} ({{ trigger.payload_json.crash_count }}x)"
+```
+
+Melding als de meter offline is:
+
+```yaml
+automation:
+  - alias: "P1 meter: offline"
+    trigger:
+      - platform: state
+        entity_id: sensor.p1_meter_actual_power_consumption
+        to: "unavailable"
+        for: "00:05:00"
+    action:
+      - service: notify.notify
+        data:
+          message: "P1 meter is al 5 minuten offline"
+```
+
+> De entity-namen hangen af van je HA installatie; controleer ze onder *Instellingen → Apparaten → P1 Meter*. Staat `WEB_USER` aan, voeg dan `username` en `password` toe aan de `rest_command`.
+
+---
+
 ## REST API
 
 De ESP biedt een HTTP API op poort 80.
@@ -266,7 +362,7 @@ De ESP biedt een HTTP API op poort 80.
 |---------|----------|-------------|
 | `GET` | `/` | Status + versienummer |
 | `GET` | `/version` | Alleen versienummer |
-| `GET` | `/restart` | Herstart de ESP |
+| `GET` | `/restart` | Herstart de ESP (normale modus, ook vanuit veilige modus). `?safe=1` = herstart in veilige modus |
 | `GET` | `/haon` | HA Auto Discovery inschakelen |
 | `GET` | `/haoff` | HA Auto Discovery uitschakelen |
 | `GET` | `/interval` | Huidig update interval opvragen |
@@ -609,7 +705,8 @@ De meeste instellingen staan in `variables.h` en worden eenmalig bij het flashen
 |-----------|-----------|-------------|
 | `DEBUG` | `0` | Zet op `1` voor Serial output tijdens ontwikkeling |
 | `UPDATE_INTERVAL` | `60000` (60 sec) | Standaard interval bij eerste flash — daarna via `/interval/set` |
-| `WIFI_RECONNECT_INTERVAL` | 15 minuten | Wachttijd tussen WiFi reconnect-pogingen |
+| `WIFI_RECONNECT_INTERVAL` | 1 minuut | Wachttijd tussen extra WiFi reconnect-pogingen |
+| `WIFI_RESTART_AFTER` | 30 minuten | Herstart als WiFi zo lang weg is |
 | `MQTT_RECONNECT_INTERVAL` | `5000` (5 sec) | Wachttijd tussen MQTT reconnect-pogingen |
 | `HOSTNAME` | `p1meter` | mDNS hostname en OTA naam |
 | `MQTT_ROOT_TOPIC` | `homeassistant/sensor/p1meter` | MQTT root topic |

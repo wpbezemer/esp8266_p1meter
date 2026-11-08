@@ -7,7 +7,10 @@
 //#define UPDATE_INTERVAL 300000 // 5 minutes
 
 // Treshold in milliseconds for WiFi reconnect interval
-#define WIFI_RECONNECT_INTERVAL (15UL * 60UL * 1000UL)  // 15 minuten
+// (de ESP probeert zelf ook automatisch opnieuw te verbinden; dit is een extra harde poging)
+#define WIFI_RECONNECT_INTERVAL (60UL * 1000UL)         // 1 minuut
+// Na zo lang zonder WiFi herstart de ESP (lost een vastgelopen WiFi stack op)
+#define WIFI_RESTART_AFTER      (30UL * 60UL * 1000UL)  // 30 minuten
 
 // Treshold in miliseconds for MQTT reconnect interval
 #define MQTT_RECONNECT_INTERVAL 5000
