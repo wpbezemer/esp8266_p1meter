@@ -707,6 +707,8 @@ De meeste instellingen staan in `variables.h` en worden eenmalig bij het flashen
 | `UPDATE_INTERVAL` | `60000` (60 sec) | Standaard interval bij eerste flash — daarna via `/interval/set` |
 | `WIFI_RECONNECT_INTERVAL` | 1 minuut | Wachttijd tussen extra WiFi reconnect-pogingen |
 | `WIFI_RESTART_AFTER` | 30 minuten | Herstart als WiFi zo lang weg is |
+| `WIFI_AP_PASSWORD` | leeg | Wachtwoord voor het setup access point (min. 8 tekens). Leeg = open netwerk `ESP...` |
+| `WEB_USER` / `WEB_PASS` | leeg | Optionele login voor webpagina's en wijzig-endpoints |
 | `MQTT_RECONNECT_INTERVAL` | `5000` (5 sec) | Wachttijd tussen MQTT reconnect-pogingen |
 | `HOSTNAME` | `p1meter` | mDNS hostname en OTA naam |
 | `MQTT_ROOT_TOPIC` | `homeassistant/sensor/p1meter` | MQTT root topic |

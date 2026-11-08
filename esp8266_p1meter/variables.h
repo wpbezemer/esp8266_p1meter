@@ -29,6 +29,10 @@ char MQTT_ROOT_TOPIC[32] = "homeassistant/sensor/p1meter";
 // * The password used for OTA
 #define OTA_PASSWORD "admin"
 
+// * Wachtwoord voor het setup access point (verschijnt als er geen WiFi is).
+//   Leeg = open netwerk "ESP...". Ingevuld (min. 8 tekens) = "P1meter-xxxxxx" met wachtwoord.
+#define WIFI_AP_PASSWORD ""
+
 // * Optionele login voor de webpagina's (leeg = geen login)
 //   Beschermt pagina's, instellingen, firmware upload, bestanden en restart.
 #define WEB_USER ""

@@ -46,8 +46,8 @@ void writeTelegramJson(Print &out);
 void haDiscovery(const String& setHomeAssistant);
 void handleHaDiscoveryOn();
 void handleHaDiscoveryOff();
-void send_mqtt_message(const char *topic, const char *payload);
-void send_metric(const String& name, const String& metric);
+bool send_mqtt_message(const char *topic, const char *payload);
+bool send_metric(const String& name, const String& metric);
 void send_data_to_broker();
 void read_p1_hardwareserial();
 void save_wifi_config_callback();
@@ -451,6 +451,22 @@ void handleApiSettingsPost(AsyncWebServerRequest *request) {
             request->send(400, "application/json", String("{\"ok\":false,\"error\":\"") + f.param + " te lang\"}");
             return;
         }
+        // Ongeldige waarde = ESP onbereikbaar voor MQTT na herstart; vooraf weigeren
+        const char *err = nullptr;
+        if (strcmp(f.param, "mqtt_host") == 0 && v.length() == 0) err = "MQTT host mag niet leeg zijn";
+        if (strcmp(f.param, "mqtt_port") == 0) {
+            long port = v.toInt();
+            bool digits = v.length() > 0;
+            for (size_t k = 0; k < v.length(); k++) if (!isDigit(v[k])) digits = false;
+            if (!digits || port < 1 || port > 65535) err = "MQTT poort moet 1-65535 zijn";
+        }
+        if (strcmp(f.param, "mqtt_topic") == 0 &&
+            (v.length() == 0 || v.indexOf('#') >= 0 || v.indexOf('+') >= 0 || v.endsWith("/")))
+            err = "Ongeldig root topic (leeg, eindigt op / of bevat # of +)";
+        if (err) {
+            request->send(400, "application/json", String("{\"ok\":false,\"error\":\"") + err + "\"}");
+            return;
+        }
         if (strcmp(v.c_str(), f.target) == 0) continue;
         strlcpy(f.target, v.c_str(), f.size);
         write_eeprom(f.addr, f.size, f.target);
@@ -531,6 +547,7 @@ void handleFsUploadChunk(AsyncWebServerRequest *request, String filename,
         if (fsUploadFile) fsUploadFile.close();
         fsUploadFile = LittleFS.open(path, "w");
         if (!fsUploadFile) { fsUploadFailed = true; return; }
+        request->onDisconnect([]() { if (fsUploadFile) fsUploadFile.close(); });
         DEBUG_PRINTF("FS upload start: %s\n", path.c_str());
     }
     if (fsUploadFailed || !fsUploadFile) return;
@@ -564,6 +581,14 @@ void handleUpdateUpload(AsyncWebServerRequest *request, String filename,
         otaUploadFailed = false;
         if (!authSilent(request)) { otaUploadFailed = true; return; }
         DEBUG_PRINTF("OTA upload start: %s\n", filename.c_str());
+        // Een eerder afgebroken upload laat de updater "running" achter (met 4 KB buffer);
+        // dan zou elke nieuwe upload mislukken tot een herstart. Eerst opruimen.
+        if (Update.isRunning()) Update.end(false);
+        Update.clearError();
+        // Verbinding weg midden in de upload (browser dicht, WiFi weg): direct opruimen
+        request->onDisconnect([]() {
+            if (Update.isRunning() && !Update.isFinished()) Update.end(false);
+        });
         Update.runAsync(true);
         if (!Update.begin((ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000)) {
             otaUploadFailed = true;
@@ -791,23 +816,24 @@ bool mqtt_reconnect() {
     }
 }
 
-void send_mqtt_message(const char *topic, const char *payload) {
+bool send_mqtt_message(const char *topic, const char *payload) {
     DEBUG_PRINTF("MQTT Outgoing on %s: ", topic);
     DEBUG_PRINTLN(payload);
     bool result = mqtt_client.publish(topic, payload, false);
     if (result) stats.mqttPublishes++;
     else { stats.mqttFailures++; DEBUG_PRINTF("MQTT publish to topic %s failed\n", topic); }
+    return result;
 }
 
-void send_metric(const char *name, const char *metric) {
+bool send_metric(const char *name, const char *metric) {
     DEBUG_PRINTF("Sending metric: %s=%s\n", name, metric);
     char topicBuf[96];
     snprintf(topicBuf, sizeof(topicBuf), "%s/%s/state", MQTT_ROOT_TOPIC, name);
-    send_mqtt_message(topicBuf, metric);
+    return send_mqtt_message(topicBuf, metric);
 }
 
-void send_metric(const String& name, const String& metric) {
-    send_metric(name.c_str(), metric.c_str());
+bool send_metric(const String& name, const String& metric) {
+    return send_metric(name.c_str(), metric.c_str());
 }
 
 void send_data_to_broker() {
@@ -825,9 +851,9 @@ void send_data_to_broker() {
         if (metricsFields[i].type == TYPE_LONG) {
             long current = *(metricsFields[i].longValue);
             if (forceAll || current != prevLongValues[i]) {
-                prevLongValues[i] = current;
                 snprintf(valueBuf, sizeof(valueBuf), "%ld", current);
-                send_metric(metricsFields[i].name, valueBuf);
+                // Alleen onthouden als het echt verstuurd is, anders volgende keer opnieuw
+                if (send_metric(metricsFields[i].name, valueBuf)) prevLongValues[i] = current;
                 sent++;
             }
         } else {
@@ -835,8 +861,7 @@ void send_data_to_broker() {
             uint32_t h = 2166136261UL;                       // FNV-1a
             for (const char *c = current; *c; c++) { h ^= (uint8_t)*c; h *= 16777619UL; }
             if (forceAll || h != prevStringHash[i]) {
-                prevStringHash[i] = h;
-                send_metric(metricsFields[i].name, current);
+                if (send_metric(metricsFields[i].name, current)) prevStringHash[i] = h;
                 sent++;
             }
         }
@@ -1202,7 +1227,7 @@ void setup_webserver() {
 void setup() {
     crashguardBoot();   // als eerste: crash herkennen en eventueel veilige modus kiezen
     EEPROM.begin(256);   // hoogste gebruikte adres is 173; buffer staat permanent in RAM
-    Serial.setRxBufferSize(1024);
+    Serial.setRxBufferSize(2048);   // ruim 2 s aan P1 data: overleeft een blokkerende MQTT connect
     Serial.begin(BAUD_RATE, SERIAL_8N1, SERIAL_FULL);
     Serial.setTimeout(200);   // een regel komt binnen ~10 ms; voorkomt 1 s blokkeren
     DEBUG_PRINTLN("");
@@ -1260,7 +1285,17 @@ void setup() {
     wifiManager.addParameter(&CUSTOM_MQTT_ROOT_TOPIC);
     wifiManager.addParameter(&CUSTOM_HA_DISCOVERY);
 
-    if (!wifiManager.autoConnect()) {
+    // Setup access point (bij geen WiFi): optioneel met wachtwoord, zodat niet iedereen
+    // in de buurt je WiFi/MQTT kan wijzigen als je router even uit staat.
+    bool wifiOk;
+    if (WIFI_AP_PASSWORD[0] != '\0') {
+        char apName[24];
+        snprintf(apName, sizeof(apName), "P1meter-%06X", ESP.getChipId());
+        wifiOk = wifiManager.autoConnect(apName, WIFI_AP_PASSWORD);
+    } else {
+        wifiOk = wifiManager.autoConnect();
+    }
+    if (!wifiOk) {
         DEBUG_PRINTLN(F("WiFi autoConnect mislukt — opnieuw proberen..."));
         delay(5000);
         ESP.restart();
@@ -1295,7 +1330,7 @@ void setup() {
     DEBUG_PRINTF("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
     mqtt_client.setServer(MQTT_HOST, atoi(MQTT_PORT));
     snprintf(statusTopic, sizeof(statusTopic), "%s/status", MQTT_ROOT_TOPIC);
-    mqtt_client.setBufferSize(700);
+    mqtt_client.setBufferSize(1024);   // grootste HA discovery bericht is ~675 bytes
     // Kortere timeouts: een onbereikbare broker mag de P1 uitlezing niet lang blokkeren
     mqtt_client.setSocketTimeout(5);
     espClient.setTimeout(2000);
@@ -1315,6 +1350,22 @@ void setup() {
 void loop() {
     const unsigned long loopStart = micros();
     const unsigned long now = millis();
+
+    // Langste loop-duur bijhouden (venster van 10 s), gemeten van start tot start:
+    // telt ook iteraties mee die vroeg stoppen (WiFi/MQTT reconnect) en tijd in de WiFi stack.
+    static unsigned long prevLoopStart = 0;
+    static unsigned long maxWindowStart = 0;
+    static unsigned long maxInWindow = 0;
+    if (prevLoopStart) {
+        unsigned long dur = loopStart - prevLoopStart;
+        if (dur > maxInWindow) maxInWindow = dur;
+    }
+    prevLoopStart = loopStart;
+    if (now - maxWindowStart >= 10000) {
+        stats.maxLoopUs = maxInWindow;
+        maxInWindow = 0;
+        maxWindowStart = now;
+    }
 
     // Uptime rollover bijhouden
     if (now < lastMillis) uptimeRollovers++;
@@ -1355,6 +1406,7 @@ void loop() {
         // Te lang geen WiFi: herstart (lost vastgelopen WiFi stack op)
         if (now - wifiLostAt > WIFI_RESTART_AFTER) {
             DEBUG_PRINTLN(F("WiFi te lang weg, herstart..."));
+            if (safeMode) crashguardForceSafeNextBoot();   // veilige modus niet stilletjes verlaten
             ESP.restart();
         }
         if (now - LAST_WIFI_RECONNECT_ATTEMPT > WIFI_RECONNECT_INTERVAL) {
@@ -1396,16 +1448,5 @@ void loop() {
     if (HA_DISCOVERY && !haDiscoverySetupRun) {
         haDiscovery("on");
         haDiscoverySetupRun = true;
-    }
-
-    // Langste loop-duur bijhouden (venster van 10 s) — handig om te zien of iets blokkeert
-    static unsigned long maxWindowStart = 0;
-    static unsigned long maxInWindow = 0;
-    unsigned long dur = micros() - loopStart;
-    if (dur > maxInWindow) maxInWindow = dur;
-    if (now - maxWindowStart >= 10000) {
-        stats.maxLoopUs = maxInWindow;
-        maxInWindow = 0;
-        maxWindowStart = now;
     }
 }
