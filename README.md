@@ -134,6 +134,8 @@ Gebruik een **10kΩ pull-up weerstand** tussen 3.3V en de DATA (RXD) pin van de 
 
 ---
 
+> **Na flashen via USB: haal de stroom er één keer helemaal af** (USB en P1-kabel los) voordat je de ESP aan de meter hangt. De ESP8266 onthoudt na een USB-flash de "flash-modus"; de eerste software-herstart (bijvoorbeeld na een update via `/update` of `/restart`) blijft dan hangen tot er een echte stroomonderbreking komt. Na één keer stroomloos zijn alle updates en herstarts op afstand veilig.
+
 ## Eerste configuratie
 
 Na het flashen start de ESP als WiFi Access Point:

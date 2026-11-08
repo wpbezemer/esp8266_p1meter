@@ -54,6 +54,7 @@ Eenvoudig draagbord voor een Wemos D1 mini. Gevoed uit de P1 poort van de meter,
 ## Let op
 
 - **Kabel.** Gebruik een **rechte** RJ12 kabel (pin 1 ↔ pin 1). Gekruiste telefoonkabels werken niet.
+- **Na flashen via USB eerst stroomloos.** Haal na een USB-flash één keer alle voeding los (USB én P1). Anders blijft de eerste herstart op afstand hangen (ESP8266 eigenschap).
 - **Flashen via USB.** De datalijn deelt de RX pin met de USB-chip. Haal tijdens flashen via USB de P1 kabel los. Daarna kan alles via `/update`.
 - **Plaatsing.** Leg de USB poort van de D1 mini aan de rand van het bord en houd het antennegedeelte (bovenkant D1 mini) vrij van koper en componenten.
 - **C1 en de meter.** Een enkele meter schakelt de P1 voeding kort uit bij een grote inschakelstroom. Gebeurt dat, gebruik dan 220 µF.
