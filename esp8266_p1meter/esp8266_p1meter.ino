@@ -177,7 +177,7 @@ void printJsonString(Print &out, const char *s) {
         char c = *s;
         if (c == '"' || c == '\\') { out.print('\\'); out.print(c); }
         else if (c == '\r') continue;
-        else if ((uint8_t)c < 0x20) out.printf("\\u%04x", c);
+        else if ((uint8_t)c < 0x20) out.printf_P(PSTR("\\u%04x"), c);
         else out.print(c);
     }
     out.print('"');
@@ -305,21 +305,21 @@ void handleApiLive(AsyncWebServerRequest *request) {
     AsyncResponseStream *resp = request->beginResponseStream("application/json");
     const unsigned long now = millis();
     resp->print('{');
-    resp->printf("\"age\":%ld,", stats.telegramsOk ? (long)(now - stats.lastTelegramAt) : -1L);
-    resp->printf("\"ok\":%u,\"crc\":%u,", stats.telegramsOk, stats.crcErrors);
-    resp->printf("\"mqtt\":%s,", mqtt_client.connected() ? "true" : "false");
-    resp->printf("\"interval\":%lu,", updateInterval);
+    resp->printf_P(PSTR("\"age\":%ld,"), stats.telegramsOk ? (long)(now - stats.lastTelegramAt) : -1L);
+    resp->printf_P(PSTR("\"ok\":%u,\"crc\":%u,"), stats.telegramsOk, stats.crcErrors);
+    resp->printf_P(PSTR("\"mqtt\":%s,"), mqtt_client.connected() ? "true" : "false");
+    resp->printf_P(PSTR("\"interval\":%lu,"), updateInterval);
     resp->print(F("\"ts\":"));  printJsonString(*resp, DSRMTIMESTAMP);
-    resp->printf(",\"tarif\":%ld", ACTUAL_TARIF_GROUP);
-    resp->printf(",\"p\":%ld,\"r\":%ld", ACTUAL_CONSUMPTION, ACTUAL_RETURNDELIVERY);
-    resp->printf(",\"t1\":%ld,\"t2\":%ld,\"r1\":%ld,\"r2\":%ld",
+    resp->printf_P(PSTR(",\"tarif\":%ld"), ACTUAL_TARIF_GROUP);
+    resp->printf_P(PSTR(",\"p\":%ld,\"r\":%ld"), ACTUAL_CONSUMPTION, ACTUAL_RETURNDELIVERY);
+    resp->printf_P(PSTR(",\"t1\":%ld,\"t2\":%ld,\"r1\":%ld,\"r2\":%ld"),
         CONSUMPTION_LOW_TARIF, CONSUMPTION_HIGH_TARIF, RETURNDELIVERY_LOW_TARIF, RETURNDELIVERY_HIGH_TARIF);
-    resp->printf(",\"gas\":%ld", GAS_METER_M3);
-    resp->printf(",\"ph\":[[%ld,%ld,%ld,%ld],[%ld,%ld,%ld,%ld],[%ld,%ld,%ld,%ld]]",
+    resp->printf_P(PSTR(",\"gas\":%ld"), GAS_METER_M3);
+    resp->printf_P(PSTR(",\"ph\":[[%ld,%ld,%ld,%ld],[%ld,%ld,%ld,%ld],[%ld,%ld,%ld,%ld]]"),
         L1_INSTANT_POWER_USAGE, L1_INSTANT_POWER_RETURN, L1_INSTANT_POWER_CURRENT, L1_VOLTAGE,
         L2_INSTANT_POWER_USAGE, L2_INSTANT_POWER_RETURN, L2_INSTANT_POWER_CURRENT, L2_VOLTAGE,
         L3_INSTANT_POWER_USAGE, L3_INSTANT_POWER_RETURN, L3_INSTANT_POWER_CURRENT, L3_VOLTAGE);
-    resp->printf(",\"ev\":[%ld,%ld,%ld,%ld]",
+    resp->printf_P(PSTR(",\"ev\":[%ld,%ld,%ld,%ld]"),
         SHORT_POWER_OUTAGES, LONG_POWER_OUTAGES, SHORT_POWER_DROPS, SHORT_POWER_PEAKS);
     resp->print('}');
     request->send(resp);
@@ -335,38 +335,38 @@ void handleApiInfo(AsyncWebServerRequest *request) {
     resp->print('{');
     resp->print(F("\"version\":\"" APPVERSION "\""));
     resp->print(F(",\"hostname\":\"" HOSTNAME "\""));
-    resp->printf(",\"uptime\":%lu", (unsigned long)(uptimeMs() / 1000ULL));
+    resp->printf_P(PSTR(",\"uptime\":%lu"), (unsigned long)(uptimeMs() / 1000ULL));
     resp->print(F(",\"reset_reason\":")); printJsonString(*resp, ESP.getResetReason().c_str());
-    resp->printf(",\"chip_id\":\"%06X\"", ESP.getChipId());
-    resp->printf(",\"cpu_mhz\":%u", ESP.getCpuFreqMHz());
-    resp->printf(",\"flash_size\":%u", ESP.getFlashChipRealSize());
-    resp->printf(",\"sketch_size\":%u,\"sketch_free\":%u", ESP.getSketchSize(), ESP.getFreeSketchSpace());
-    resp->printf(",\"heap_free\":%u,\"heap_max_block\":%u,\"heap_frag\":%u",
+    resp->printf_P(PSTR(",\"chip_id\":\"%06X\""), ESP.getChipId());
+    resp->printf_P(PSTR(",\"cpu_mhz\":%u"), ESP.getCpuFreqMHz());
+    resp->printf_P(PSTR(",\"flash_size\":%u"), ESP.getFlashChipRealSize());
+    resp->printf_P(PSTR(",\"sketch_size\":%u,\"sketch_free\":%u"), ESP.getSketchSize(), ESP.getFreeSketchSpace());
+    resp->printf_P(PSTR(",\"heap_free\":%u,\"heap_max_block\":%u,\"heap_frag\":%u"),
         ESP.getFreeHeap(), ESP.getMaxFreeBlockSize(), ESP.getHeapFragmentation());
     resp->print(F(",\"core\":")); printJsonString(*resp, ESP.getCoreVersion().c_str());
     resp->print(F(",\"sdk\":"));  printJsonString(*resp, ESP.getSdkVersion());
-    resp->printf(",\"fs_total\":%u,\"fs_used\":%u", fsOk ? (unsigned)fsi.totalBytes : 0, fsOk ? (unsigned)fsi.usedBytes : 0);
+    resp->printf_P(PSTR(",\"fs_total\":%u,\"fs_used\":%u"), fsOk ? (unsigned)fsi.totalBytes : 0, fsOk ? (unsigned)fsi.usedBytes : 0);
     resp->print(F(",\"ssid\":"));  printJsonString(*resp, WiFi.SSID().c_str());
     resp->print(F(",\"bssid\":\"")); resp->print(WiFi.BSSIDstr()); resp->print('"');
-    resp->printf(",\"rssi\":%d,\"channel\":%d", WiFi.RSSI(), WiFi.channel());
-    resp->printf(",\"ip\":\"%s\"", IPADDRESS);
+    resp->printf_P(PSTR(",\"rssi\":%d,\"channel\":%d"), WiFi.RSSI(), WiFi.channel());
+    resp->printf_P(PSTR(",\"ip\":\"%s\""), IPADDRESS);
     resp->print(F(",\"gateway\":\"")); resp->print(WiFi.gatewayIP().toString()); resp->print('"');
     resp->print(F(",\"dns\":\""));     resp->print(WiFi.dnsIP().toString());     resp->print('"');
     resp->print(F(",\"mac\":\""));     resp->print(WiFi.macAddress());           resp->print('"');
     resp->print(F(",\"mqtt_host\":")); printJsonString(*resp, MQTT_HOST);
-    resp->printf(",\"mqtt_port\":\"%s\"", MQTT_PORT);
+    resp->printf_P(PSTR(",\"mqtt_port\":\"%s\""), MQTT_PORT);
     resp->print(F(",\"mqtt_topic\":")); printJsonString(*resp, MQTT_ROOT_TOPIC);
-    resp->printf(",\"mqtt_connected\":%s,\"mqtt_state\":%d", mqtt_client.connected() ? "true" : "false", mqtt_client.state());
-    resp->printf(",\"mqtt_publishes\":%u,\"mqtt_failures\":%u,\"mqtt_reconnects\":%u",
+    resp->printf_P(PSTR(",\"mqtt_connected\":%s,\"mqtt_state\":%d"), mqtt_client.connected() ? "true" : "false", mqtt_client.state());
+    resp->printf_P(PSTR(",\"mqtt_publishes\":%u,\"mqtt_failures\":%u,\"mqtt_reconnects\":%u"),
         stats.mqttPublishes, stats.mqttFailures, stats.mqttReconnects);
-    resp->printf(",\"last_publish_age\":%ld,\"last_publish_count\":%u",
+    resp->printf_P(PSTR(",\"last_publish_age\":%ld,\"last_publish_count\":%u"),
         stats.lastPublishAt ? (long)(now - stats.lastPublishAt) : -1L, stats.lastPublishCount);
-    resp->printf(",\"wifi_reconnects\":%u", stats.wifiReconnects);
-    resp->printf(",\"telegrams_ok\":%u,\"crc_errors\":%u", stats.telegramsOk, stats.crcErrors);
-    resp->printf(",\"last_telegram_age\":%ld", stats.telegramsOk ? (long)(now - stats.lastTelegramAt) : -1L);
-    resp->printf(",\"max_loop_us\":%lu", stats.maxLoopUs);
-    resp->printf(",\"interval\":%lu", updateInterval);
-    resp->printf(",\"ha_discovery\":%s", HA_DISCOVERY ? "true" : "false");
+    resp->printf_P(PSTR(",\"wifi_reconnects\":%u"), stats.wifiReconnects);
+    resp->printf_P(PSTR(",\"telegrams_ok\":%u,\"crc_errors\":%u"), stats.telegramsOk, stats.crcErrors);
+    resp->printf_P(PSTR(",\"last_telegram_age\":%ld"), stats.telegramsOk ? (long)(now - stats.lastTelegramAt) : -1L);
+    resp->printf_P(PSTR(",\"max_loop_us\":%lu"), stats.maxLoopUs);
+    resp->printf_P(PSTR(",\"interval\":%lu"), updateInterval);
+    resp->printf_P(PSTR(",\"ha_discovery\":%s"), HA_DISCOVERY ? "true" : "false");
     resp->print(F(",\"dsmr_version\":")); printJsonString(*resp, DSRMVERSION);
     resp->print(F(",\"meter_id\":"));     printJsonString(*resp, EQUIPMENTID);
     resp->print(F(",\"gas_id\":"));       printJsonString(*resp, GASEQUIPMENTID);
@@ -379,14 +379,14 @@ void handleApiSettingsGet(AsyncWebServerRequest *request) {
     if (!authOK(request)) return;
     AsyncResponseStream *resp = request->beginResponseStream("application/json");
     resp->print('{');
-    resp->printf("\"interval\":%lu", updateInterval / 1000UL);
-    resp->printf(",\"ha_discovery\":%s", HA_DISCOVERY ? "true" : "false");
-    resp->printf(",\"auto_update\":%s", AUTO_UPDATE ? "true" : "false");
-    resp->printf(",\"ota_hours\":%lu", otaCheckInterval / 3600000UL);
+    resp->printf_P(PSTR("\"interval\":%lu"), updateInterval / 1000UL);
+    resp->printf_P(PSTR(",\"ha_discovery\":%s"), HA_DISCOVERY ? "true" : "false");
+    resp->printf_P(PSTR(",\"auto_update\":%s"), AUTO_UPDATE ? "true" : "false");
+    resp->printf_P(PSTR(",\"ota_hours\":%lu"), otaCheckInterval / 3600000UL);
     resp->print(F(",\"mqtt_host\":"));  printJsonString(*resp, MQTT_HOST);
     resp->print(F(",\"mqtt_port\":"));  printJsonString(*resp, MQTT_PORT);
     resp->print(F(",\"mqtt_user\":"));  printJsonString(*resp, MQTT_USER);
-    resp->printf(",\"mqtt_pass_set\":%s", MQTT_PASS[0] ? "true" : "false");
+    resp->printf_P(PSTR(",\"mqtt_pass_set\":%s"), MQTT_PASS[0] ? "true" : "false");
     resp->print(F(",\"mqtt_topic\":")); printJsonString(*resp, MQTT_ROOT_TOPIC);
     resp->print('}');
     request->send(resp);
@@ -462,7 +462,7 @@ void listDir(Print &out, const String &dirPath, bool &first) {
         if (!first) out.print(',');
         first = false;
         out.print(F("{\"name\":")); printJsonString(out, full.c_str());
-        out.printf(",\"size\":%u}", (unsigned)dir.fileSize());
+        out.printf_P(PSTR(",\"size\":%u}"), (unsigned)dir.fileSize());
     }
 }
 
@@ -471,11 +471,11 @@ void handleFsList(AsyncWebServerRequest *request) {
     FSInfo fsi;
     bool fsOk = LittleFS.info(fsi);
     AsyncResponseStream *resp = request->beginResponseStream("application/json");
-    resp->printf("{\"total\":%u,\"used\":%u,\"files\":[",
+    resp->printf_P(PSTR("{\"total\":%u,\"used\":%u,\"files\":["),
         fsOk ? (unsigned)fsi.totalBytes : 0, fsOk ? (unsigned)fsi.usedBytes : 0);
     bool first = true;
     listDir(*resp, "/", first);
-    resp->print("]}");
+    resp->print(F("]}"));
     request->send(resp);
 }
 
@@ -1043,21 +1043,21 @@ bool decode_telegram(int len) {
 void writeTelegramJson(Print &f) {
     f.println(F("{"));
     f.println(F("  \"device\": {"));
-    f.printf("    \"ip_address\": \"%s\",\n", IPADDRESS);
+    f.printf_P(PSTR("    \"ip_address\": \"%s\",\n"), IPADDRESS);
     f.print(F("    \"dsrm_version\": "));      printJsonString(f, DSRMVERSION);   f.println(',');
     f.print(F("    \"dsrm_timestamp\": "));    printJsonString(f, DSRMTIMESTAMP); f.println(',');
     f.print(F("    \"dsrm_equipment_id\": ")); printJsonString(f, EQUIPMENTID);   f.println();
     f.println(F("  },"));
     f.println(F("  \"readings\": {"));
-    f.printf("    \"consumption_low_tarif\": { \"value\": %.3f, \"unit\": \"kWh\" },\n", CONSUMPTION_LOW_TARIF / 1000.00);
-    f.printf("    \"consumption_high_tarif\": { \"value\": %.3f, \"unit\": \"kWh\" },\n", CONSUMPTION_HIGH_TARIF / 1000.00);
-    f.printf("    \"return_low_tarif\": { \"value\": %.3f, \"unit\": \"kWh\" },\n", RETURNDELIVERY_LOW_TARIF / 1000.00);
-    f.printf("    \"return_high_tarif\": { \"value\": %.3f, \"unit\": \"kWh\" }\n", RETURNDELIVERY_HIGH_TARIF / 1000.00);
+    f.printf_P(PSTR("    \"consumption_low_tarif\": { \"value\": %.3f, \"unit\": \"kWh\" },\n"), CONSUMPTION_LOW_TARIF / 1000.00);
+    f.printf_P(PSTR("    \"consumption_high_tarif\": { \"value\": %.3f, \"unit\": \"kWh\" },\n"), CONSUMPTION_HIGH_TARIF / 1000.00);
+    f.printf_P(PSTR("    \"return_low_tarif\": { \"value\": %.3f, \"unit\": \"kWh\" },\n"), RETURNDELIVERY_LOW_TARIF / 1000.00);
+    f.printf_P(PSTR("    \"return_high_tarif\": { \"value\": %.3f, \"unit\": \"kWh\" }\n"), RETURNDELIVERY_HIGH_TARIF / 1000.00);
     f.println(F("  },"));
     f.println(F("  \"actuals\": {"));
-    f.printf("    \"actual_consumption\": { \"value\": %.3f, \"unit\": \"kW\" },\n", ACTUAL_CONSUMPTION / 1000.00);
-    f.printf("    \"actual_return\": { \"value\": %.3f, \"unit\": \"kW\" },\n", ACTUAL_RETURNDELIVERY / 1000.00);
-    f.printf("    \"tarif\": %ld\n", ACTUAL_TARIF_GROUP);
+    f.printf_P(PSTR("    \"actual_consumption\": { \"value\": %.3f, \"unit\": \"kW\" },\n"), ACTUAL_CONSUMPTION / 1000.00);
+    f.printf_P(PSTR("    \"actual_return\": { \"value\": %.3f, \"unit\": \"kW\" },\n"), ACTUAL_RETURNDELIVERY / 1000.00);
+    f.printf_P(PSTR("    \"tarif\": %ld\n"), ACTUAL_TARIF_GROUP);
     f.println(F("  },"));
     long *phases[3][4] = {
         {&L1_INSTANT_POWER_USAGE, &L1_INSTANT_POWER_RETURN, &L1_INSTANT_POWER_CURRENT, &L1_VOLTAGE},
@@ -1065,23 +1065,23 @@ void writeTelegramJson(Print &f) {
         {&L3_INSTANT_POWER_USAGE, &L3_INSTANT_POWER_RETURN, &L3_INSTANT_POWER_CURRENT, &L3_VOLTAGE},
     };
     for (int p = 0; p < 3; p++) {
-        f.printf("  \"l%d\": {\n", p + 1);
-        f.printf("    \"power\": { \"value\": %.3f, \"unit\": \"kW\" },\n", *phases[p][0] / 1000.00);
-        f.printf("    \"power_return\": { \"value\": %.3f, \"unit\": \"kW\" },\n", *phases[p][1] / 1000.00);
-        f.printf("    \"current\": { \"value\": %ld, \"unit\": \"A\" },\n", *phases[p][2] / 1000);
-        f.printf("    \"voltage\": { \"value\": %ld, \"unit\": \"V\" }\n", *phases[p][3] / 1000);
+        f.printf_P(PSTR("  \"l%d\": {\n"), p + 1);
+        f.printf_P(PSTR("    \"power\": { \"value\": %.3f, \"unit\": \"kW\" },\n"), *phases[p][0] / 1000.00);
+        f.printf_P(PSTR("    \"power_return\": { \"value\": %.3f, \"unit\": \"kW\" },\n"), *phases[p][1] / 1000.00);
+        f.printf_P(PSTR("    \"current\": { \"value\": %ld, \"unit\": \"A\" },\n"), *phases[p][2] / 1000);
+        f.printf_P(PSTR("    \"voltage\": { \"value\": %ld, \"unit\": \"V\" }\n"), *phases[p][3] / 1000);
         f.println(F("  },"));
     }
     f.println(F("  \"gas\": {"));
-    f.printf("    \"gas_delivered\": { \"value\": %.3f, \"unit\": \"m3\" },\n", GAS_METER_M3 / 1000.00);
+    f.printf_P(PSTR("    \"gas_delivered\": { \"value\": %.3f, \"unit\": \"m3\" },\n"), GAS_METER_M3 / 1000.00);
     f.print(F("    \"gas_equipment_id\": ")); printJsonString(f, GASEQUIPMENTID); f.println(',');
     f.print(F("    \"gas_meter_type\": "));   printJsonString(f, GASMETERTYPE);   f.println();
     f.println(F("  },"));
     f.println(F("  \"status\": {"));
-    f.printf("    \"short_power_outage\": %ld,\n", SHORT_POWER_OUTAGES);
-    f.printf("    \"long_power_outage\": %ld,\n", LONG_POWER_OUTAGES);
-    f.printf("    \"short_power_drops\": %ld,\n", SHORT_POWER_DROPS);
-    f.printf("    \"short_power_peaks\": %ld\n", SHORT_POWER_PEAKS);
+    f.printf_P(PSTR("    \"short_power_outage\": %ld,\n"), SHORT_POWER_OUTAGES);
+    f.printf_P(PSTR("    \"long_power_outage\": %ld,\n"), LONG_POWER_OUTAGES);
+    f.printf_P(PSTR("    \"short_power_drops\": %ld,\n"), SHORT_POWER_DROPS);
+    f.printf_P(PSTR("    \"short_power_peaks\": %ld\n"), SHORT_POWER_PEAKS);
     f.println(F("  },"));
     f.println(F("  \"rawtelegram\": ["));
     // Regels uit de snapshot, zonder de buffer te wijzigen (geen strtok)
