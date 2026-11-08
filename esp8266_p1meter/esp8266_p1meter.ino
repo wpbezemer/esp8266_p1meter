@@ -131,6 +131,11 @@ WiFiClient espClient;
 // * Initiate MQTT client
 PubSubClient mqtt_client(espClient);
 
+// {root}/status: "online" of "offline". "offline" komt ook als MQTT "last will" van de
+// broker wanneer de ESP wegvalt (crash, stroom, WiFi). In veilige modus ook "offline",
+// zodat de P1 sensors in HA op "niet beschikbaar" gaan.
+char statusTopic[48];
+
 // * Initiate API settings
 AsyncWebServer httpRestServer(HTTP_REST_PORT);
 
@@ -734,11 +739,6 @@ void tick() {
 // **********************************
 // * MQTT                           *
 // **********************************
-// {root}/status: "online" of "offline". "offline" komt ook als MQTT "last will" van de
-// broker wanneer de ESP wegvalt (crash, stroom, WiFi). In veilige modus ook "offline",
-// zodat de P1 sensors in HA op "niet beschikbaar" gaan.
-char statusTopic[48];
-
 // Diagnose naar MQTT, na elke (her)verbinding. Alles retained, behalve het event.
 void publishDiagnostics() {
     char t[64];
