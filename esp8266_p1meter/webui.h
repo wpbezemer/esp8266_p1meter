@@ -49,6 +49,7 @@ button:disabled{opacity:.5;cursor:default}
 .mut{color:var(--mut)}.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all}
 svg.spark{width:100%;height:60px;display:block}
 .hide{display:none}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:420px;font:12px/1.4 ui-monospace,Menlo,monospace;margin:10px 0 0;white-space:pre}
 </style></head><body>
 <header><div class="hw"><div class="brand">P1 Meter <small id="ver"></small></div>
 <nav><a href="/" data-v="dash">Dashboard</a><a href="/info" data-v="info">Info</a><a href="/settings" data-v="settings">Instellingen</a><a href="/files" data-v="files">Bestanden</a><a href="/update" data-v="update">Update</a></nav></div></header>
@@ -97,7 +98,13 @@ el.innerHTML=`<line x1="0" x2="300" y1="${z}" y2="${z}" stroke="currentColor" st
 
 /* ---------- Info ---------- */
 function vInfo(){
-app.innerHTML=`<div id="inf"></div><div class="card"><h2>Acties</h2><div class="actions"><a class="btn sec" href="/telegram" target="_blank">Telegram JSON</a><a class="btn sec" href="/api/info" target="_blank">Info JSON</a><button class="danger" id="rb">Herstarten</button></div><div id="rbm"></div></div>`;
+app.innerHTML=`<div id="inf"></div><div class="card"><h2>Acties</h2><div class="actions"><a class="btn sec" href="/telegram" target="_blank">Telegram JSON</a><a class="btn sec" href="/api/info" target="_blank">Info JSON</a><button class="danger" id="rb">Herstarten</button></div><div id="rbm"></div></div>
+<div class="card"><h2>Debug: ruw telegram</h2><p class="mut">Vangt het eerstvolgende geldige telegram op zoals de meter het stuurt. Gebruikt alleen tijdens debuggen 2 KB geheugen.</p>
+<div class="actions"><button class="sec" id="rw">Ruw telegram ophalen</button><button class="sec hide" id="rc">Kopiëren</button><button class="sec hide" id="rf">Geheugen vrijgeven</button></div><div id="rm"></div><pre id="rp" class="hide"></pre></div>`;
+$('#rw').onclick=()=>{$('#rw').disabled=true;msg($('#rm'),'Wachten op volgend telegram...');let n=0;
+const t=()=>fetch('/api/raw',{cache:'no-store'}).then(r=>r.text().then(x=>{if(r.status==200){$('#rm').innerHTML='';$('#rp').textContent=x;$('#rp').classList.remove('hide');$('#rc').classList.remove('hide');$('#rf').classList.remove('hide');$('#rw').disabled=false}else if(++n<30)setTimeout(t,1000);else{msg($('#rm'),'Geen geldig telegram ontvangen binnen 30 s.','bad');$('#rw').disabled=false}})).catch(e=>{msg($('#rm'),esc(e.message),'bad');$('#rw').disabled=false});t()};
+$('#rc').onclick=()=>{const x=$('#rp').textContent;(navigator.clipboard?navigator.clipboard.writeText(x):Promise.reject()).then(()=>msg($('#rm'),'Gekopieerd.','ok')).catch(()=>{const r=document.createRange();r.selectNodeContents($('#rp'));getSelection().removeAllRanges();getSelection().addRange(r)})};
+$('#rf').onclick=()=>api('/api/raw?free=1').then(()=>{$('#rp').classList.add('hide');$('#rc').classList.add('hide');$('#rf').classList.add('hide');msg($('#rm'),'Vrijgegeven.','ok')});
 $('#rb').onclick=()=>{if(!confirm('ESP herstarten?'))return;api('/restart').then(()=>waitReboot($('#rbm'))).catch(e=>msg($('#rbm'),esc(e.message),'bad'))};
 const T=(t,rows)=>`<div class="card"><h2>${t}</h2><table>${rows.map(r=>`<tr><td class="mut">${r[0]}</td><td class="r ${r[2]||''}">${r[1]}</td></tr>`).join('')}</table></div>`;
 every(()=>api('/api/info').then(d=>{

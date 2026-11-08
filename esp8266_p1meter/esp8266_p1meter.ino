@@ -86,9 +86,18 @@ static bool     deltaInitialized = false;
 #define FULL_UPDATE_INTERVAL 300000UL
 unsigned long LAST_FULL_UPDATE = 0;
 
-// * Laatste geldige telegram (snapshot, zodat webrequests nooit een half telegram zien)
-char lastTelegram[FULL_TELEGRAM_SIZE];
-int  lastTelegramLen = 0;
+// * Ruw telegram, alleen op aanvraag (debug). Geen permanente buffers:
+//   pas bij een aanvraag wordt 2 KB gereserveerd, en na gebruik / 5 min weer vrijgegeven.
+enum RawState : uint8_t { RAW_IDLE, RAW_WAIT, RAW_CAPTURING, RAW_READY };
+volatile RawState rawState = RAW_IDLE;
+char *rawBuf = nullptr;
+int   rawLen = 0;
+unsigned long rawStateAt = 0;
+#define RAW_WAIT_TIMEOUT  30000UL     // max wachten op een geldig telegram
+#define RAW_KEEP_TIMEOUT  300000UL    // opgevangen telegram 5 min bewaren
+
+// * Lange regel (langer dan de regelbuffer) wordt in stukken gelezen
+bool lineContinues = false;
 
 // * Statistieken voor de info pagina
 struct Stats {
@@ -283,6 +292,26 @@ void handleTelegramJson(AsyncWebServerRequest *request) {
     AsyncResponseStream *resp = request->beginResponseStream("application/json");
     writeTelegramJson(*resp);
     request->send(resp);
+}
+
+// GET /api/raw — ruw telegram voor debugging, op aanvraag
+//   202 = bezig met opvangen (opnieuw proberen), 200 = tekst van het telegram
+//   ?free=1 geeft het geheugen direct weer vrij
+void handleApiRaw(AsyncWebServerRequest *request) {
+    if (!authOK(request)) return;
+    if (hasAnyParam(request, "free")) {
+        if (rawState == RAW_READY || rawState == RAW_IDLE) rawFree();
+        request->send(200, "text/plain", "ok");
+        return;
+    }
+    if (rawState == RAW_READY && rawBuf) {
+        AsyncResponseStream *resp = request->beginResponseStream("text/plain", rawLen + 16);
+        resp->write((const uint8_t*)rawBuf, rawLen);
+        request->send(resp);
+        return;
+    }
+    if (rawState == RAW_IDLE) { rawStateAt = millis(); rawState = RAW_WAIT; }
+    request->send(202, "text/plain", "wachten op volgend telegram...");
 }
 
 // GET /api/live — compacte actuele waarden voor het dashboard
@@ -806,39 +835,71 @@ bool getStringValue(char *buffer, int maxlen, char startchar, char endchar, char
     return true;
 }
 
+// Ruw telegram opvangen (alleen als er om gevraagd is)
+void rawAppend(const char *data, int len, bool isStart) {
+    if (rawState == RAW_WAIT && isStart) {
+        if (!rawBuf) rawBuf = (char*)malloc(FULL_TELEGRAM_SIZE);
+        if (!rawBuf) { rawState = RAW_IDLE; return; }
+        rawLen = 0;
+        rawState = RAW_CAPTURING;
+    }
+    if (rawState != RAW_CAPTURING) return;
+    if (rawLen + len < FULL_TELEGRAM_SIZE) {
+        memcpy(rawBuf + rawLen, data, len);
+        rawLen += len;
+        rawBuf[rawLen] = 0;
+    }
+}
+
+void rawFree() {
+    rawState = RAW_IDLE;
+    if (rawBuf) { free(rawBuf); rawBuf = nullptr; }
+    rawLen = 0;
+}
+
 // Leest beschikbare regels van de P1 poort. Wordt ELKE loop aangeroepen, zodat de
 // 1KB RX buffer nooit overloopt (ook niet bij een interval van 60 s). Of er naar
 // MQTT gestuurd wordt bepaalt validateTelegram() op basis van het interval.
+//
+// De regelbuffer is klein (P1_MAXLINELENGTH). Een langere regel (bv. een tekstbericht
+// 0-0:96.13.0 of de storingslog 1-0:99.97.0) wordt in stukken gelezen: die stukken tellen
+// mee voor de CRC maar worden niet uitgelezen. Zo blijft de CRC kloppen.
 void read_p1_hardwareserial() {
     while (Serial.available()) {
         ESP.wdtDisable();
         int len = Serial.readBytesUntil('\n', telegram, P1_MAXLINELENGTH);
         ESP.wdtEnable(1);
-        telegram[len] = '\n';
-        telegram[len + 1] = 0;
 
-        // Nieuw telegram begint met '/' → raw buffer opnieuw beginnen
-        if (len > 0 && telegram[0] == '/') fullLen = 0;
-        if (fullLen + len + 2 < FULL_TELEGRAM_SIZE) {
-            memcpy(fullTelegram + fullLen, telegram, len + 1);
-            fullLen += len + 1;
-            fullTelegram[fullLen] = 0;
-        }
+        const bool complete   = len < P1_MAXLINELENGTH;   // '\n' gevonden
+        const bool partOfLong = lineContinues || !complete;
+        const bool isStart    = !lineContinues && len > 0 && telegram[0] == '/';
+        lineContinues = !complete;
+        if (complete) telegram[len++] = '\n';
+        telegram[len] = 0;
+
+        if (rawState == RAW_WAIT || rawState == RAW_CAPTURING) rawAppend(telegram, len, isStart);
         yield();
+
+        if (partOfLong) {
+            // Stuk van een lange regel: alleen CRC bijwerken (bevat geen '/' of '!')
+            currentCRC = CRC16(currentCRC, (unsigned char*)telegram, len);
+            continue;
+        }
         if (validateTelegram(len)) return;
     }
 }
 
 bool validateTelegram(int len) {
-    bool result = decode_telegram(len + 1);
+    const bool isEnd = memchr(telegram, '!', len) != nullptr;
+    bool result = decode_telegram(len);
+    // Ongeldig telegram tijdens opvangen: opnieuw proberen met het volgende
+    if (!result && isEnd && rawState == RAW_CAPTURING) rawState = RAW_WAIT;
     if (result) {
         const unsigned long now = millis();
         stats.telegramsOk++;
         stats.lastTelegramAt = now;
 
-        // Snapshot voor /telegram (geen yield tussendoor → altijd consistent)
-        memcpy(lastTelegram, fullTelegram, fullLen + 1);
-        lastTelegramLen = fullLen;
+        if (rawState == RAW_CAPTURING) { rawState = RAW_READY; rawStateAt = now; }
 
         if (mqtt_client.connected() &&
             (LAST_UPDATE_SENT == 0 || now - LAST_UPDATE_SENT + INTERVAL_TOLERANCE >= updateInterval)) {
@@ -942,25 +1003,27 @@ void writeTelegramJson(Print &f) {
     f.printf_P(PSTR("    \"short_power_peaks\": %ld\n"), SHORT_POWER_PEAKS);
     f.println(F("  },"));
     f.println(F("  \"rawtelegram\": ["));
-    // Regels uit de snapshot, zonder de buffer te wijzigen (geen strtok)
+    // Alleen gevuld als er recent een ruw telegram is opgevangen via /api/raw (debug)
     bool firstLine = true;
-    int i = 0;
-    while (i < lastTelegramLen) {
-        int start = i;
-        while (i < lastTelegramLen && lastTelegram[i] != '\n') i++;
-        int end = i;
-        while (end > start && lastTelegram[end - 1] == '\r') end--;
-        i++;
-        if (end == start) continue;
-        if (!firstLine) f.println(',');
-        firstLine = false;
-        f.print(F("    \""));
-        for (int k = start; k < end; k++) {
-            char c = lastTelegram[k];
-            if (c == '"' || c == '\\') f.print('\\');
-            f.print(c);
+    if (rawState == RAW_READY && rawBuf) {
+        int i = 0;
+        while (i < rawLen) {
+            int start = i;
+            while (i < rawLen && rawBuf[i] != '\n') i++;
+            int end = i;
+            while (end > start && rawBuf[end - 1] == '\r') end--;
+            i++;
+            if (end == start) continue;
+            if (!firstLine) f.println(',');
+            firstLine = false;
+            f.print(F("    \""));
+            for (int k = start; k < end; k++) {
+                char c = rawBuf[k];
+                if (c == '"' || c == '\\') f.print('\\');
+                f.print(c);
+            }
+            f.print('"');
         }
-        f.print('"');
     }
     f.println();
     f.println(F("  ]"));
@@ -1035,6 +1098,7 @@ void setup_webserver() {
 
     // JSON API voor de pagina's
     httpRestServer.on("/api/live", HTTP_GET, handleApiLive);
+    httpRestServer.on("/api/raw", HTTP_GET, handleApiRaw);
     httpRestServer.on("/api/info", HTTP_GET, handleApiInfo);
     httpRestServer.on("/api/settings", HTTP_GET, handleApiSettingsGet);
     httpRestServer.on("/api/settings", HTTP_POST, handleApiSettingsPost);
@@ -1193,6 +1257,12 @@ void loop() {
 
     ArduinoOTA.handle();
     MDNS.update();
+
+    // Ruw telegram (debug): niet eindeloos geheugen vasthouden
+    if (rawState != RAW_IDLE) {
+        unsigned long limit = (rawState == RAW_READY) ? RAW_KEEP_TIMEOUT : RAW_WAIT_TIMEOUT;
+        if (millis() - rawStateAt > limit) rawFree();
+    }
 
     if (setRestart && millis() - restartInitiated >= restartDelayMs) {
         ESP.restart();

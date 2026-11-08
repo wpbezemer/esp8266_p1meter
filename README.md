@@ -246,6 +246,7 @@ De pagina haalt zelf data op via `/api/*`; de ESP rendert geen HTML. De webserve
 | `GET` | `/api/live` | Actuele waarden (compact JSON) |
 | `GET` | `/api/info` | Device info en statistieken |
 | `GET` / `POST` | `/api/settings` | Instellingen lezen / wijzigen (alleen meegestuurde velden) |
+| `GET` | `/api/raw` | Ruw telegram (debug): eerst `202` terwijl het volgende geldige telegram wordt opgevangen, daarna `200` met de tekst. `?free=1` geeft het geheugen vrij |
 | `GET` | `/api/fs/list` | Bestanden op LittleFS |
 | `GET` | `/api/fs/file?path=/x[&download=1]` | Bestand bekijken / downloaden |
 | `POST` | `/api/fs/upload` | Bestand uploaden (multipart) |
@@ -415,6 +416,8 @@ curl "http://192.168.1.x/mqtt?server=192.168.1.20"
 ### `GET /telegram`
 
 Geeft het meest recent ontvangen en geverifieerde telegram terug als JSON. Wordt bijgewerkt bij elke succesvolle CRC-check en direct uit RAM geserveerd (sinds v2.8.0 niet meer elke cyclus naar flash geschreven).
+
+> Sinds v2.8.0 is `rawtelegram` standaard leeg (`[]`) om 4 KB RAM te besparen. Het wordt alleen gevuld in de 5 minuten nadat je een ruw telegram hebt opgevraagd via `/api/raw` of de knop **Ruw telegram ophalen** op `/info`.
 
 **Response (voorbeeld):**
 ```json

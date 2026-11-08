@@ -10,16 +10,14 @@
 // #define SERIAL_RX RX
 // #define SERIAL_TX TX
 
-// * Max telegram length
-#define P1_MAXLINELENGTH 1050       // do not change
-#define LINE_MAX_SIZE 128           // do not change
-#define FULL_TELEGRAM_SIZE 2048     // do not change
+// * Regelbuffer. Alle regels die uitgelezen worden zijn < 60 tekens.
+//   Langere regels (tekstbericht 0-0:96.13.0, storingslog 1-0:99.97.0) worden in
+//   stukken gelezen en tellen alleen mee voor de CRC, dus 128 is genoeg.
+#define P1_MAXLINELENGTH 128        // do not change
+#define FULL_TELEGRAM_SIZE 2048     // max grootte ruw telegram (alleen bij debug via /api/raw)
 
-// * Set to store received telegram
-// +2: read_p1_hardwareserial() zet na de regel nog '\n' en '\0' (telegram[len] en telegram[len + 1])
+// * Set to store received telegram line (+2 voor '\n' en '\0')
 char telegram[P1_MAXLINELENGTH + 2];    // do not change
-char fullTelegram[FULL_TELEGRAM_SIZE];  // do not change
-int fullLen = 0;                    // do not change
 
 // * The version of tedzor
 #define APPVERSION "2.8.0"            // do not change
