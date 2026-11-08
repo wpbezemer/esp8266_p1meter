@@ -1174,8 +1174,6 @@ void setup_webserver() {
     httpRestServer.on("/info", HTTP_GET, handlePage);
     httpRestServer.on("/settings", HTTP_GET, handlePage);
     httpRestServer.on("/files", HTTP_GET, handlePage);
-    httpRestServer.on("/update", HTTP_GET, handlePage);
-    httpRestServer.on("/update/", HTTP_GET, handlePage);
 
     // JSON API voor de pagina's
     httpRestServer.on("/api/live", HTTP_GET, handleApiLive);
@@ -1200,6 +1198,9 @@ void setup_webserver() {
     httpRestServer.on("/update/settings", HTTP_GET, handleUpdateSettings);
     httpRestServer.on("/update/github", HTTP_GET, handleUpdateGitHub);
     httpRestServer.on("/update/upload", HTTP_POST, handleUpdateUploadDone, handleUpdateUpload);
+    // /update pas NA de /update/* routes: de server matcht "/update" ook als prefix van "/update/..."
+    httpRestServer.on("/update", HTTP_GET, handlePage);
+    httpRestServer.on("/update/", HTTP_GET, handlePage);
 
     httpRestServer.onNotFound([](AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Not found");
