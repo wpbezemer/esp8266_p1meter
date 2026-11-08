@@ -15,22 +15,10 @@
 // * The hostname of our little creature
 #define HOSTNAME "p1meter"
 
-// * GitHub OTA update settings
+// * GitHub repo — alleen gebruikt door de browser op /update om de laatste release te tonen
+//   (de ESP zelf maakt geen verbinding met GitHub)
 #define GITHUB_USER         "wpbezemer"
 #define GITHUB_REPO         "esp8266_p1meter"
-// HTTP (geen SSL) voor versiecheck — spaart ~20KB heap op ESP8266
-// rawcdn.githack.com serveert GitHub raw bestanden via HTTP
-#define GITHUB_VERSION_HOST "rawcdn.githack.com"
-#define GITHUB_VERSION_PATH "/wpbezemer/esp8266_p1meter/master/version.json"
-// HTTPS alleen voor firmware download (vereist voor integriteit)
-#define GITHUB_FIRMWARE_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
-
-// * OTA state — runtime variabelen
-char          LATEST_VERSION[16] = "";
-bool          UPDATE_AVAILABLE   = false;
-bool          AUTO_UPDATE        = false;   // automatisch updaten als nieuwe versie gevonden
-unsigned long LAST_OTA_CHECK     = 0;
-unsigned long otaCheckInterval   = (6UL * 60UL * 60UL * 1000UL); // standaard 6 uur in ms
 
 // * MQTT root topic
 char MQTT_ROOT_TOPIC[32] = "homeassistant/sensor/p1meter";

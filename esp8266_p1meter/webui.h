@@ -116,8 +116,6 @@ function vSettings(){
 app.innerHTML=`<div class="card"><h2>Algemeen</h2>
 <label>MQTT update interval (seconden, 1–3600)</label><input type="number" id="iv" min="1" max="3600">
 <div class="row"><div><div class="t">Home Assistant discovery</div><div class="s">Sensors automatisch aanmaken in Home Assistant</div></div><input type="checkbox" id="ha"></div>
-<label>Versiecheck op GitHub (elke x uur, 0 = uit)</label><input type="number" id="oh" min="0" max="24">
-<div class="row"><div><div class="t">Auto-update</div><div class="s">Nieuwe versie automatisch installeren</div></div><input type="checkbox" id="au"></div>
 <div class="actions"><button id="s1">Opslaan</button></div><div id="m1"></div><p class="mut">Wordt direct actief, geen herstart nodig.</p></div>
 <div class="card"><h2>MQTT broker</h2>
 <label>Host</label><input type="text" id="mh" maxlength="63">
@@ -126,8 +124,8 @@ app.innerHTML=`<div class="card"><h2>Algemeen</h2>
 <label>Wachtwoord</label><input type="password" id="mw" maxlength="31" autocomplete="new-password" placeholder="leeg = ongewijzigd">
 <label>Root topic</label><input type="text" id="mt" maxlength="31">
 <div class="actions"><button id="s2">Opslaan en herstarten</button></div><div id="m2"></div></div>`;
-api('/api/settings').then(d=>{$('#iv').value=d.interval;$('#ha').checked=d.ha_discovery;$('#oh').value=d.ota_hours;$('#au').checked=d.auto_update;$('#mh').value=d.mqtt_host;$('#mp').value=d.mqtt_port;$('#mu').value=d.mqtt_user;$('#mt').value=d.mqtt_topic;if(d.mqtt_pass_set)$('#mw').placeholder='•••••• (leeg = ongewijzigd)'}).catch(e=>msg($('#m1'),esc(e.message),'bad'));
-$('#s1').onclick=()=>post('/api/settings',{interval:$('#iv').value,ha_discovery:$('#ha').checked?1:0,ota_hours:$('#oh').value,auto_update:$('#au').checked?1:0}).then(()=>msg($('#m1'),'Opgeslagen.','ok')).catch(e=>msg($('#m1'),esc(e.message),'bad'));
+api('/api/settings').then(d=>{$('#iv').value=d.interval;$('#ha').checked=d.ha_discovery;$('#mh').value=d.mqtt_host;$('#mp').value=d.mqtt_port;$('#mu').value=d.mqtt_user;$('#mt').value=d.mqtt_topic;if(d.mqtt_pass_set)$('#mw').placeholder='•••••• (leeg = ongewijzigd)'}).catch(e=>msg($('#m1'),esc(e.message),'bad'));
+$('#s1').onclick=()=>post('/api/settings',{interval:$('#iv').value,ha_discovery:$('#ha').checked?1:0}).then(()=>msg($('#m1'),'Opgeslagen.','ok')).catch(e=>msg($('#m1'),esc(e.message),'bad'));
 $('#s2').onclick=()=>{if(!confirm('MQTT instellingen opslaan? De ESP herstart bij wijzigingen.'))return;post('/api/settings',{mqtt_host:$('#mh').value,mqtt_port:$('#mp').value,mqtt_user:$('#mu').value,mqtt_pass:$('#mw').value,mqtt_topic:$('#mt').value}).then(d=>d.restart?waitReboot($('#m2')):msg($('#m2'),'Niets gewijzigd.','ok')).catch(e=>msg($('#m2'),esc(e.message),'bad'))};
 }
 
@@ -146,16 +144,19 @@ $('#fb').disabled=true;xhrUpload('/api/fs/upload',f,'file',p=>$('#fp').style.wid
 load()}
 
 /* ---------- Update ---------- */
+function vcmp(a,b){a=a.split('.').map(Number);b=b.split('.').map(Number);for(let i=0;i<3;i++){const d=(a[i]||0)-(b[i]||0);if(d)return d}return 0}
 function vUpdate(){
-app.innerHTML=`<div class="card"><h2>Firmware</h2><div id="us">Laden...</div>
-<div class="row"><div><div class="t">Auto-update</div><div class="s">Automatisch installeren als een nieuwe versie gevonden wordt</div></div><input type="checkbox" id="au"></div></div>
-<div class="card"><h2>Update via GitHub</h2><p class="mut">Downloadt de laatste release en flasht automatisch (30–60 s).</p><button id="gh">Download en installeer</button><div id="gm"></div></div>
+app.innerHTML=`<div class="card"><h2>Firmware</h2><div id="us">Laden...</div><div id="gh"></div>
+<p class="mut">De versiecheck doet je browser rechtstreeks bij GitHub; de ESP zelf maakt geen verbinding met internet.</p></div>
 <div class="card"><h2>Update via .bin bestand</h2><input type="file" id="bf" accept=".bin"><div class="actions"><button id="bb">Upload en installeer</button></div><div class="bar" style="margin-top:10px"><div id="bp"></div></div><div id="bm"></div>
 <p class="mut">Arduino IDE: Sketch &rarr; Export Compiled Binary. PlatformIO: .pio/build/d1_mini/firmware.bin</p></div>`;
-api('/update/check').then(d=>{const c=d.update_available;$('#au').checked=d.auto_update;
-$('#us').innerHTML=`<div class="msg ${c?'bad':'ok'}">Huidig: <b>v${esc(d.current)}</b> &middot; ${d.latest=='not_checked_yet'?'nog niet gecheckt':c?'nieuwe versie beschikbaar: <b>v'+esc(d.latest)+'</b>':'up-to-date (laatste: v'+esc(d.latest)+')'}</div>`+(d.last_error?`<div class="msg bad">Laatste fout: ${esc(d.last_error)}</div>`:'')});
-$('#au').onchange=e=>post('/api/settings',{auto_update:e.target.checked?1:0});
-$('#gh').onclick=()=>{if(!confirm('Firmware van GitHub installeren?'))return;$('#gh').disabled=true;api('/update/github').then(()=>waitReboot($('#gm'))).catch(e=>{msg($('#gm'),esc(e.message),'bad');$('#gh').disabled=false})};
+api('/update/check').then(d=>{
+$('#us').innerHTML=`<div class="msg">Huidige versie: <b>v${esc(d.current)}</b></div>`;
+fetch('https://api.github.com/repos/'+d.repo+'/releases/latest').then(r=>r.ok?r.json():Promise.reject()).then(g=>{
+const v=String(g.tag_name||'').replace(/^v/i,''),nw=vcmp(v,d.current)>0,bin=(g.assets||[]).find(a=>/\.bin$/i.test(a.name));
+$('#gh').innerHTML=`<div class="msg ${nw?'bad':'ok'}">${nw?'Nieuwe versie beschikbaar: <b>v'+esc(v)+'</b>':'Up-to-date (laatste release: v'+esc(v)+')'}</div>`+
+`<div class="actions">${bin?`<a class="btn${nw?'':' sec'}" href="${esc(bin.browser_download_url)}">Download ${esc(bin.name)}</a>`:''}<a class="btn sec" href="${esc(g.html_url)}" target="_blank">Release notes</a></div>`+
+(nw&&bin?'<p class="mut">Download het bestand en upload het hieronder.</p>':'')}).catch(()=>{$('#gh').innerHTML='<div class="msg">Kon GitHub niet bereiken (of er is nog geen release).</div>'})});
 $('#bb').onclick=()=>{const f=$('#bf').files[0];if(!f)return;if(!confirm('Firmware '+f.name+' installeren?'))return;$('#bb').disabled=true;
 xhrUpload('/update/upload',f,'firmware',p=>$('#bp').style.width=p*100+'%').then(()=>waitReboot($('#bm'))).catch(e=>{msg($('#bm'),esc(e.message),'bad');$('#bb').disabled=false})};
 }

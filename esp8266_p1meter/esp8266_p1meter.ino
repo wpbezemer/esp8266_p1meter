@@ -2,9 +2,6 @@
 #include <EEPROM.h>
 #include <DNSServer.h>
 #include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
-#include <ESP8266httpUpdate.h>
-#include <WiFiClientSecureBearSSL.h>
 #include <Ticker.h>
 #include <WiFiManager.h>
 #include <ESP8266mDNS.h>
@@ -13,6 +10,7 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <Updater.h>
 
 //for reboot api
 #define WEBSERVER_H
@@ -54,10 +52,6 @@ void save_wifi_config_callback();
 void setup_ota();
 void setup_mdns();
 void setup_webserver();
-bool isNewerVersion(const char* a, const char* b);
-bool checkGitHubVersion();
-void publishUpdateStatus();
-void performGitHubUpdate();
 void scheduleRestart(unsigned long delayMs);
 
 // * EEPROM address map
@@ -69,8 +63,7 @@ void scheduleRestart(unsigned long delayMs);
 #define EEPROM_ADDR_SETTINGS_FLAG   166    // 166
 #define EEPROM_ADDR_HA_DISCOVERY    167    // 167 (1 byte, 0/1)
 #define EEPROM_ADDR_UPDATE_INTERVAL 168    // 168-171 (4 bytes, unsigned long)
-#define EEPROM_ADDR_OTA_CHECK_HOURS 172    // 172 (1 byte, 0=uit, 1-24 uur)
-#define EEPROM_ADDR_AUTO_UPDATE     173    // 173 (1 byte, bool)
+// 172-173 waren GitHub versiecheck / auto-update (v2.7), nu ongebruikt
 
 // * Initiate led blinker library
 Ticker ticker;
@@ -92,9 +85,6 @@ static bool     deltaInitialized = false;
 // * Forced full update every 5 minutes regardless of delta
 #define FULL_UPDATE_INTERVAL 300000UL
 unsigned long LAST_FULL_UPDATE = 0;
-
-// * Vlag: P1 cyclus volledig afgerond (telegram + MQTT)
-bool p1CycleComplete = false;
 
 // * Laatste geldige telegram (snapshot, zodat webrequests nooit een half telegram zien)
 char lastTelegram[FULL_TELEGRAM_SIZE];
@@ -121,12 +111,8 @@ uint64_t uptimeMs() {
     return ((uint64_t)uptimeRollovers << 32) | millis();
 }
 
-// * Acties die vanuit async webhandlers in loop() uitgevoerd moeten worden
-//   (blokkerende code in een async callback laat de ESP crashen)
-volatile bool doGitHubUpdate = false;
-unsigned long gitHubUpdateRequestedAt = 0;
+// * Herstart wordt vanuit loop() gedaan, nooit vanuit een async callback
 unsigned long restartDelayMs = restartInterval;
-char lastUpdateError[64] = "";
 
 // * Initiate WIFI client
 WiFiClient espClient;
@@ -381,8 +367,6 @@ void handleApiSettingsGet(AsyncWebServerRequest *request) {
     resp->print('{');
     resp->printf_P(PSTR("\"interval\":%lu"), updateInterval / 1000UL);
     resp->printf_P(PSTR(",\"ha_discovery\":%s"), HA_DISCOVERY ? "true" : "false");
-    resp->printf_P(PSTR(",\"auto_update\":%s"), AUTO_UPDATE ? "true" : "false");
-    resp->printf_P(PSTR(",\"ota_hours\":%lu"), otaCheckInterval / 3600000UL);
     resp->print(F(",\"mqtt_host\":"));  printJsonString(*resp, MQTT_HOST);
     resp->print(F(",\"mqtt_port\":"));  printJsonString(*resp, MQTT_PORT);
     resp->print(F(",\"mqtt_user\":"));  printJsonString(*resp, MQTT_USER);
@@ -402,16 +386,6 @@ void handleApiSettingsPost(AsyncWebServerRequest *request) {
         if (s < 1 || s > 3600) { request->send(400, "application/json", "{\"ok\":false,\"error\":\"interval moet 1-3600 zijn\"}"); return; }
         updateInterval = (unsigned long)s * 1000UL;
         EEPROM.put(EEPROM_ADDR_UPDATE_INTERVAL, updateInterval);
-    }
-    if (hasAnyParam(request, "ota_hours")) {
-        long h = paramValue(request, "ota_hours").toInt();
-        if (h < 0 || h > 24) { request->send(400, "application/json", "{\"ok\":false,\"error\":\"versiecheck moet 0-24 uur zijn\"}"); return; }
-        otaCheckInterval = (unsigned long)h * 3600000UL;
-        EEPROM.write(EEPROM_ADDR_OTA_CHECK_HOURS, (uint8_t)h);
-    }
-    if (hasAnyParam(request, "auto_update")) {
-        AUTO_UPDATE = paramValue(request, "auto_update") == "1";
-        EEPROM.write(EEPROM_ADDR_AUTO_UPDATE, AUTO_UPDATE ? 1 : 0);
     }
     if (hasAnyParam(request, "ha_discovery")) {
         bool on = paramValue(request, "ha_discovery") == "1";
@@ -535,115 +509,8 @@ void handleFsUploadDone(AsyncWebServerRequest *request) {
 }
 
 // **********************************
-// * OTA Update                     *
+// * Firmware update (upload .bin)  *
 // **********************************
-
-// Vergelijk twee versiestrings semantisch (major.minor.patch)
-// Geeft true terug als b NIEUWER is dan a
-bool isNewerVersion(const char* a, const char* b) {
-    int a1 = 0, a2 = 0, a3 = 0;
-    int b1 = 0, b2 = 0, b3 = 0;
-    sscanf(a, "%d.%d.%d", &a1, &a2, &a3);
-    sscanf(b, "%d.%d.%d", &b1, &b2, &b3);
-    if (b1 != a1) return b1 > a1;
-    if (b2 != a2) return b2 > a2;
-    return b3 > a3;
-}
-
-bool checkGitHubVersion() {
-    // Gebruik plain WiFiClient (geen SSL) — spaart ~20KB heap
-    // versiecheck haalt alleen een klein JSON bestand op, geen gevoelige data
-    WiFiClient client;
-    HTTPClient http;
-    http.setTimeout(5000);
-
-    if (!http.begin(client, GITHUB_VERSION_HOST, 80, GITHUB_VERSION_PATH)) {
-        DEBUG_PRINTLN(F("Versiecheck: HTTP begin mislukt"));
-        http.end();
-        return false;
-    }
-
-    int code = http.GET();
-    DEBUG_PRINTF("Versiecheck HTTP code: %d\n", code);
-
-    if (code != 200) {
-        DEBUG_PRINTF("Versiecheck mislukt: HTTP %d\n", code);
-        http.end();
-        return false;
-    }
-
-    String payload = http.getString();
-    http.end();
-
-    JsonDocument doc;
-    if (deserializeJson(doc, payload) != DeserializationError::Ok) {
-        DEBUG_PRINTLN(F("Versiecheck: JSON parse fout"));
-        return false;
-    }
-
-    const char* latest = doc["version"];
-    if (!latest || latest[0] == '\0') return false;
-
-    strlcpy(LATEST_VERSION, latest, sizeof(LATEST_VERSION));
-    UPDATE_AVAILABLE = isNewerVersion(APPVERSION, LATEST_VERSION);
-
-    DEBUG_PRINTF("Versiecheck: huidig=%s latest=%s update=%s\n",
-        APPVERSION, LATEST_VERSION, UPDATE_AVAILABLE ? "JA" : "nee");
-    return true;
-}
-
-// Publiceer update status naar MQTT
-void publishUpdateStatus() {
-    String topicAvail = String(MQTT_ROOT_TOPIC) + "/update_available/state";
-    String topicVer   = String(MQTT_ROOT_TOPIC) + "/latest_version/state";
-    mqtt_client.publish(topicAvail.c_str(), UPDATE_AVAILABLE ? "true" : "false", true);
-    mqtt_client.publish(topicVer.c_str(),   LATEST_VERSION[0] ? LATEST_VERSION : APPVERSION, true);
-}
-
-// Voer de GitHub OTA update uit (alleen vanuit loop() aanroepen!)
-void performGitHubUpdate() {
-    std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
-    client->setInsecure();
-    ESPhttpUpdate.setLedPin(LED_BUILTIN, LOW);
-    ESPhttpUpdate.rebootOnUpdate(true);
-    ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);   // GitHub releases redirecten
-    DEBUG_PRINTLN(F("GitHub OTA update starten..."));
-    t_httpUpdate_return ret = ESPhttpUpdate.update(*client, GITHUB_FIRMWARE_URL);
-    switch (ret) {
-        case HTTP_UPDATE_FAILED:
-            strlcpy(lastUpdateError, ESPhttpUpdate.getLastErrorString().c_str(), sizeof(lastUpdateError));
-            DEBUG_PRINTF("Update mislukt: %s\n", lastUpdateError);
-            break;
-        case HTTP_UPDATE_NO_UPDATES:
-            strlcpy(lastUpdateError, "geen update gevonden", sizeof(lastUpdateError));
-            DEBUG_PRINTLN(F("Geen update gevonden op GitHub"));
-            break;
-        case HTTP_UPDATE_OK:
-            DEBUG_PRINTLN(F("Update geslaagd!"));
-            break;
-    }
-}
-
-// GET /update/settings - sla auto-update instelling op (compatibel met v2.7 formulier)
-void handleUpdateSettings(AsyncWebServerRequest *request) {
-    if (!authOK(request)) return;
-    AUTO_UPDATE = request->hasParam("autoupdate");
-    EEPROM.write(EEPROM_ADDR_AUTO_UPDATE, AUTO_UPDATE ? 1 : 0);
-    EEPROM.commit();
-    DEBUG_PRINTF("Auto-update: %s\n", AUTO_UPDATE ? "aan" : "uit");
-    AsyncWebServerResponse *resp = request->beginResponse(302);
-    resp->addHeader("Location", "/update");
-    request->send(resp);
-}
-
-// GET /update/github — vraag loop() om te downloaden en flashen
-void handleUpdateGitHub(AsyncWebServerRequest *request) {
-    if (!authOK(request)) return;
-    lastUpdateError[0] = '\0';
-    gitHubUpdateRequestedAt = millis();
-    doGitHubUpdate = true;
-    request->send(200, "text/plain", "GitHub update gestart. Dit duurt 30-60 seconden, daarna herstart de ESP.");
-}
 
 // POST /update/upload — bin bestand upload (chunks)
 bool otaUploadFailed = false;
@@ -680,25 +547,11 @@ void handleUpdateUploadDone(AsyncWebServerRequest *request) {
     scheduleRestart(1000);
 }
 
-// GET /update/check - geeft gecachede versiecheck waarden terug (geen live check)
+// GET /update/check - huidige versie (de versiecheck tegen GitHub doet de browser zelf)
 void handleUpdateCheck(AsyncWebServerRequest *request) {
-    String json = "{";
-    json += F("\"success\":true");
-    json += F(",\"current\":\"");
-    json += APPVERSION;
-    json += F("\",\"latest\":\"");
-    json += LATEST_VERSION[0] ? LATEST_VERSION : "not_checked_yet";
-    json += F("\",\"update_available\":");
-    json += UPDATE_AVAILABLE ? F("true") : F("false");
-    json += F(",\"auto_update\":");
-    json += AUTO_UPDATE ? F("true") : F("false");
-    json += F(",\"updating\":");
-    json += doGitHubUpdate ? F("true") : F("false");
-    json += F(",\"last_error\":\"");
-    json += lastUpdateError;
-    json += F("\",\"free_heap\":");
+    String json = F("{\"success\":true,\"current\":\"" APPVERSION "\",\"repo\":\"" GITHUB_USER "/" GITHUB_REPO "\",\"free_heap\":");
     json += ESP.getFreeHeap();
-    json += F("}");
+    json += '}';
     request->send(200, "application/json", json);
 }
 
@@ -796,12 +649,13 @@ void haDiscovery(const String& setHomeAssistant) {
     sendHomeAssistantConfig("GAS Meter Type",               "gas_meter_type",            "gasdevice",   setHomeAssistant);
     sendHomeAssistantConfig("GAS Equipment ID",             "gas_equipment_id",          "gasdevice",   setHomeAssistant);
     sendHomeAssistantConfig("IP Address",                   "ip_address",                "ipaddress",   setHomeAssistant);
-    sendHomeAssistantConfig("Update Available",             "update_available",          "other",       setHomeAssistant);
-    sendHomeAssistantConfig("Latest Version",               "latest_version",            "other",       setHomeAssistant);
 
-    // Extra: stuur ook direct de huidige waarden als retained berichten
-    if (setHomeAssistant == "on" && LATEST_VERSION[0] != '\0') {
-        publishUpdateStatus();
+    // v2.7 had "Update Available" en "Latest Version" sensors: retained config en state opruimen
+    static const char* const oldSensors[] = {"update_available", "latest_version"};
+    for (const char* id : oldSensors) {
+        String base = String(MQTT_ROOT_TOPIC) + "/" + id;
+        mqtt_client.publish((base + "/config").c_str(), "", true);
+        mqtt_client.publish((base + "/state").c_str(), "", true);
     }
 }
 
@@ -985,7 +839,6 @@ bool validateTelegram(int len) {
             (LAST_UPDATE_SENT == 0 || now - LAST_UPDATE_SENT + INTERVAL_TOLERANCE >= updateInterval)) {
             LAST_UPDATE_SENT = now;
             send_data_to_broker();
-            p1CycleComplete = true; // volledig klaar: telegram + MQTT
         }
     }
     return result;
@@ -1195,8 +1048,6 @@ void setup_webserver() {
     httpRestServer.on("/mqtt", HTTP_GET, handleMQTTSettings);
     httpRestServer.on("/telegram", HTTP_GET, handleTelegramJson);
     httpRestServer.on("/update/check", HTTP_GET, handleUpdateCheck);
-    httpRestServer.on("/update/settings", HTTP_GET, handleUpdateSettings);
-    httpRestServer.on("/update/github", HTTP_GET, handleUpdateGitHub);
     httpRestServer.on("/update/upload", HTTP_POST, handleUpdateUploadDone, handleUpdateUpload);
     // /update pas NA de /update/* routes: de server matcht "/update" ook als prefix van "/update/..."
     httpRestServer.on("/update", HTTP_GET, handlePage);
@@ -1247,17 +1098,6 @@ void setup() {
             updateInterval = savedInterval;
             DEBUG_PRINTF("Update interval geladen: %lu ms\n", updateInterval);
         }
-
-        // Laad OTA check interval
-        uint8_t savedCheckHours = EEPROM.read(EEPROM_ADDR_OTA_CHECK_HOURS);
-        if (savedCheckHours <= 24) {
-            otaCheckInterval = (unsigned long)savedCheckHours * 3600000UL; // 0 = uit
-            DEBUG_PRINTF("OTA check interval geladen: %d uur\n", savedCheckHours);
-        }
-
-        // Laad auto-update
-        AUTO_UPDATE = (EEPROM.read(EEPROM_ADDR_AUTO_UPDATE) == 1);
-        DEBUG_PRINTF("Auto-update: %s\n", AUTO_UPDATE ? "aan" : "uit");
     }
 
     WiFiManagerParameter CUSTOM_MQTT_HOST("host",  "MQTT hostname",      MQTT_HOST,       64);
@@ -1330,9 +1170,6 @@ void setup() {
     setup_webserver();
 
     updateIpAddress();
-
-    // Versiecheck wordt gedaan zodra de eerste P1 cyclus klaar is in loop()
-    LAST_OTA_CHECK = 0;
 }
 
 // **********************************
@@ -1356,12 +1193,6 @@ void loop() {
         ESP.restart();
     }
 
-    // GitHub update aangevraagd via web: 1 s wachten zodat de HTTP response eruit is
-    if (doGitHubUpdate && millis() - gitHubUpdateRequestedAt >= 1000) {
-        performGitHubUpdate();   // herstart bij succes
-        doGitHubUpdate = false;
-    }
-
     if (setHaDOn)  { setHaDOn  = false; handleHaDiscoveryOn();  }
     if (setHaDOff) { setHaDOff = false; handleHaDiscoveryOff(); }
 
@@ -1371,7 +1202,6 @@ void loop() {
         wifiWasConnected    = false;
         haDiscoverySetupRun = false;
         deltaInitialized    = false;
-        p1CycleComplete     = false;
         if (now - LAST_WIFI_RECONNECT_ATTEMPT > WIFI_RECONNECT_INTERVAL) {
             LAST_WIFI_RECONNECT_ATTEMPT = now;
             stats.wifiReconnects++;
@@ -1390,7 +1220,6 @@ void loop() {
     if (!mqtt_client.connected()) {
         haDiscoverySetupRun = false;
         deltaInitialized    = false;
-        p1CycleComplete     = false;
         if (now - LAST_RECONNECT_ATTEMPT > MQTT_RECONNECT_INTERVAL) {
             LAST_RECONNECT_ATTEMPT = now;
             DEBUG_PRINTLN(F("MQTT verbroken, probeer opnieuw te verbinden..."));
@@ -1399,9 +1228,6 @@ void loop() {
                 if (HA_DISCOVERY && !haDiscoverySetupRun) {
                     haDiscovery("on");
                     haDiscoverySetupRun = true;
-                }
-                if (LATEST_VERSION[0] != '\0') {
-                    publishUpdateStatus();
                 }
             }
         }
@@ -1413,24 +1239,6 @@ void loop() {
     if (HA_DISCOVERY && !haDiscoverySetupRun) {
         haDiscovery("on");
         haDiscoverySetupRun = true;
-    }
-
-    // --- Periodieke OTA versiecheck ---
-    // Direct na een afgeronde P1 cyclus, zodat de blocking HTTP call (max 5 s)
-    // in de pauze tussen twee telegrammen valt.
-    if (otaCheckInterval > 0 && p1CycleComplete) {
-        p1CycleComplete = false;
-        if (LAST_OTA_CHECK == 0 || now - LAST_OTA_CHECK >= otaCheckInterval) {
-            LAST_OTA_CHECK = now ? now : 1;
-            DEBUG_PRINTLN(F("Periodieke OTA versiecheck..."));
-            if (checkGitHubVersion() && mqtt_client.connected()) {
-                publishUpdateStatus();
-            }
-            if (AUTO_UPDATE && UPDATE_AVAILABLE) {
-                DEBUG_PRINTLN(F("Auto-update: nieuwe versie gevonden, update starten..."));
-                performGitHubUpdate();
-            }
-        }
     }
 
     // Langste loop-duur bijhouden (venster van 10 s) — handig om te zien of iets blokkeert
