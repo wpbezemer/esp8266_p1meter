@@ -17,6 +17,7 @@ Software voor de ESP8266 die DSMR5 P1 slimme meter data uitleest en verstuurt na
 - [Installatie](#installatie)
 - [Eerste configuratie](#eerste-configuratie)
 - [MQTT topics](#mqtt-topics)
+- [Webinterface](#webinterface)
 - [REST API](#rest-api)
 - [Home Assistant Auto Discovery](#home-assistant-auto-discovery)
 - [JSON Telegram endpoint](#json-telegram-endpoint)
@@ -50,6 +51,7 @@ Verder uitgebreid met een volledige REST API, Home Assistant Auto Discovery, del
 | **Per-fase teruglevering** | L1, L2, L3 teruglevering als aparte MQTT topics |
 | **REST API** | 12 endpoints voor beheer, monitoring en configuratie |
 | **JSON telegram endpoint** | Laatste telegram beschikbaar als JSON via HTTP |
+| **Webinterface** | Dashboard, device info, instellingen, bestandsbeheer en firmware update in de browser |
 | **Web OTA updater** | Firmware updaten via browser — GitHub download of eigen .bin upload |
 | **Automatische versiecheck** | ESP checkt GitHub periodiek op nieuwe versie, publiceert naar MQTT en HA |
 | **Auto-update** | Optioneel automatisch installeren bij nieuwe versie |
@@ -222,6 +224,38 @@ Met de standaard root topic `homeassistant/sensor/p1meter`:
 
 ---
 
+## Webinterface
+
+Open `http://{ip-adres}/` in een browser. Eén lichte pagina (opgeslagen in flash, ~18 KB) met:
+
+| Pagina | Inhoud |
+|--------|--------|
+| `/` Dashboard | Live verbruik/teruglevering, grafiek, per fase (W, A, V), meterstanden, gas, netkwaliteit — ververst elke seconde |
+| `/info` | Firmware, uptime, reset-reden, heap/fragmentatie, flash, WiFi (RSSI, IP, MAC), MQTT status en tellers, telegrammen en CRC fouten, langste loop-duur |
+| `/settings` | Update interval, HA discovery, versiecheck, auto-update en MQTT broker (host/poort/gebruiker/wachtwoord/topic) |
+| `/files` | Bestandsbeheer LittleFS: lijst, bekijken, downloaden, uploaden, verwijderen |
+| `/update` | Firmware update via GitHub of eigen `.bin`, met voortgangsbalk |
+
+De pagina haalt zelf data op via `/api/*`; de ESP rendert geen HTML. De webserver is asynchroon, dus de P1 uitlezing en MQTT (ook op 1 seconde) lopen gewoon door terwijl de pagina open staat.
+
+`curl http://{ip}/` geeft nog steeds `Ok - P1Meter v…` terug; alleen browsers krijgen het dashboard.
+
+**Optionele login:** zet `WEB_USER` en `WEB_PASS` in `variables.h`. Dan zijn de pagina's en alle wijzig-endpoints (restart, instellingen, upload, bestanden) beveiligd. Leeg = geen login (standaard).
+
+### Extra API endpoints
+
+| Methode | Endpoint | Omschrijving |
+|---------|----------|-------------|
+| `GET` | `/api/live` | Actuele waarden (compact JSON) |
+| `GET` | `/api/info` | Device info en statistieken |
+| `GET` / `POST` | `/api/settings` | Instellingen lezen / wijzigen (alleen meegestuurde velden) |
+| `GET` | `/api/fs/list` | Bestanden op LittleFS |
+| `GET` | `/api/fs/file?path=/x[&download=1]` | Bestand bekijken / downloaden |
+| `POST` | `/api/fs/upload` | Bestand uploaden (multipart) |
+| `POST` | `/api/fs/delete` | Bestand verwijderen (`path=`) |
+
+---
+
 ## REST API
 
 De ESP biedt een HTTP API op poort 80.
@@ -383,7 +417,7 @@ curl "http://192.168.1.x/mqtt?server=192.168.1.20"
 
 ### `GET /telegram`
 
-Geeft het meest recent ontvangen en geverifieerde telegram terug als JSON, opgeslagen in LittleFS. Wordt bijgewerkt bij elke succesvolle CRC-check.
+Geeft het meest recent ontvangen en geverifieerde telegram terug als JSON. Wordt bijgewerkt bij elke succesvolle CRC-check en direct uit RAM geserveerd (sinds v2.8.0 niet meer elke cyclus naar flash geschreven).
 
 **Response (voorbeeld):**
 ```json
